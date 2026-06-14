@@ -1,8 +1,10 @@
 # AlphaFX Roadmap
 
-This roadmap keeps the project aligned with the original principle:
+This roadmap keeps the project aligned with the original positioning:
 
-Quant model generates the signal. AI explains, challenges, and summarizes it.
+AlphaFX is an explainable macro-factor research platform for AUD/USD directional signals.
+
+It is not an AI Forex Bot, automated money-making robot, or live trading system.
 
 ## Current Baseline: V1
 
@@ -21,20 +23,224 @@ V1 includes:
 - AI-style explanation, contrarian, and judge agents
 - Unit tests for core quant logic
 
-## Next Version: V2 Research Upgrade
+Known V1 limitations:
 
-Goal: make the app useful for a normal user who should not need to find, download, format, or upload macro CSV files, then add a transparent ML research layer that predicts whether the future 20-trading-day AUD/USD return is positive.
+- Signal probability is still score-mapped rather than historically calibrated.
+- Backtest is useful but still too coarse for research-grade trade analysis.
+- Holding-period logic needs true entry/exit trade records.
+- Macro factors are incomplete unless data is manually supplied.
+- No walk-forward validation yet.
+- No factor weight stability or information coefficient diagnostics yet.
 
-V2 is split into two phases:
+## Next Version: V2 Professional Research Upgrade
 
-- V2.0: Macro auto-data foundation.
-- V2.1: Machine-learning comparison layer.
+Goal: upgrade AlphaFX from a macro-factor scoring demo into a verifiable AUD/USD quant research platform.
 
-## V2.0 Macro Auto-Data Foundation
+V2 should be implemented incrementally, keeping the app runnable after every step.
 
-Problem: V1 supports AU2Y, US2Y, and iron ore as CSV uploads, but most users will not know where to download these files or how to format them. Keeping upload as a normal workflow makes the app feel unfinished and creates avoidable user burden. If those factors stay missing, the factor view, rule signal, and future ML model are weaker.
+## V2.0 P0 Research Validity
 
-Goal: make macro factor collection fully automatic. Do not keep CSV upload in the core V2 UI.
+Priority: fix signal reliability, calibration, and backtesting rigor before adding complex ML.
+
+### P0.1 Signal Forward-Return Analysis
+
+Add historical diagnostics for bullish, bearish, and neutral signals over 20, 40, and 60 trading days.
+
+Outputs by signal class and horizon:
+
+- Average forward return.
+- Median forward return.
+- Hit rate.
+- Win/loss ratio.
+- Max drawdown.
+- Sharpe ratio.
+- Profit factor.
+- Sample size.
+
+Acceptance criteria:
+
+- The app can explain how each signal class historically behaved.
+- Diagnostics are calculated from historical outcomes, not hardcoded expectations.
+- Missing or small sample sizes are clearly flagged.
+
+### P0.2 Calibrated Probability
+
+Replace the current hardcoded score-to-probability mapping as the primary probability source.
+
+Plan:
+
+- Keep score mapping as fallback only.
+- Calibrate probability from historical hit rate by signal class and horizon.
+- Start with simple expanding-window or prior-window calibration.
+- Avoid using future outcomes to calibrate the latest signal.
+
+Acceptance criteria:
+
+- Latest probability is labelled as calibrated or fallback.
+- The calibration sample window and sample size are visible.
+- Tests cover probability fallback and calibrated probability behavior.
+
+### P0.3 Trade-Level Backtest
+
+Upgrade backtesting from daily-position approximation to explicit trades.
+
+Required trade fields:
+
+- Signal date.
+- Entry date.
+- Exit date.
+- Position.
+- Holding period.
+- Entry price.
+- Exit price.
+- Realised return.
+- Transaction cost.
+- Trade-level PnL.
+- Status.
+
+Rules:
+
+- Avoid look-ahead bias.
+- Today signal can only execute from the next trading day.
+- Holding period must be simulated as actual entry-to-exit trades.
+
+Acceptance criteria:
+
+- Backtest exposes a trade list.
+- Metrics are derived from trade-level PnL where appropriate.
+- Tests cover next-day execution and holding-period exits.
+
+### P0.4 Benchmark Comparison
+
+Add simple transparent baselines:
+
+- Buy and hold AUD/USD.
+- Always flat.
+- Random signal baseline with fixed seed.
+- Simple moving-average crossover.
+- Naive momentum baseline.
+
+Acceptance criteria:
+
+- Strategy performance is always shown next to benchmarks.
+- Random baseline is deterministic for reproducibility.
+
+### P0.5 Cost Model
+
+Extend the cost assumptions beyond a single transaction-cost input:
+
+- Transaction cost bps.
+- Spread bps.
+- Slippage bps.
+- Rollover/swap placeholder.
+- Broker cost config placeholder.
+
+Acceptance criteria:
+
+- Backtest UI shows cost assumptions.
+- Costs are included in trade-level returns.
+- The app labels rollover as a placeholder until real broker data exists.
+
+## V2.1 P1 Validation And Diagnostics
+
+Priority: add robustness checks before treating signals as research-grade.
+
+### Walk-Forward Validation
+
+Implement walk-forward backtesting:
+
+- Train/calibration window: default 3 years.
+- Test window: default 6 months.
+- Roll forward through history.
+- Recompute calibration or factor weights in each window.
+
+Outputs:
+
+- In-sample metrics.
+- Out-of-sample metrics.
+- Degradation ratio.
+- Rolling Sharpe.
+- Rolling drawdown.
+- Yearly returns.
+
+### Factor Weight Diagnostics
+
+Keep this simple and transparent before any complex ML:
+
+- Logistic regression.
+- Ridge regression.
+- Information coefficient ranking.
+- Correlation with future 20/40/60 day AUD/USD returns.
+
+Outputs per factor:
+
+- Coefficient.
+- Information coefficient.
+- Hit contribution.
+- Stability across time windows.
+- Feature importance.
+
+Do not add deep learning or reinforcement learning.
+
+### Risk Management Upgrade
+
+Replace fixed stop/take-profit assumptions with research-grade risk suggestions:
+
+- ATR or volatility-based stop loss.
+- Volatility-adjusted position sizing.
+- Max risk per trade.
+- Max portfolio exposure.
+- Max drawdown guard.
+- No-trade regime when volatility is extreme.
+- Event blackout placeholder for FOMC, CPI, NFP, and RBA decisions.
+
+### Paper Trade Journal
+
+Add a SQLite-backed journal for daily research records.
+
+Fields:
+
+- Date.
+- AUD/USD price.
+- Signal.
+- Score.
+- Calibrated probability.
+- Factor values.
+- Factor contributions.
+- Recommended position.
+- Stop loss.
+- Take profit.
+- Explanation.
+- Entry price.
+- Exit price.
+- Realised PnL.
+- Status: open or closed.
+
+## V2.2 P1 Dashboard Upgrade
+
+Upgrade Streamlit from a signal display into a research dashboard.
+
+Dashboard sections:
+
+- Current signal with calibrated probability.
+- Factor breakdown.
+- Risk recommendation.
+- Backtest equity and drawdown.
+- Trade list.
+- Monthly returns.
+- Yearly returns.
+- Signal diagnostics.
+- Hit rate by horizon.
+- Factor contribution chart.
+- Walk-forward results.
+- Rolling Sharpe.
+- Rolling drawdown.
+
+## V2.3 P1 Macro Auto-Data Foundation
+
+Problem: V1 supports AU2Y, US2Y, and iron ore as CSV uploads, but users should not need to find, download, format, or upload macro CSV files.
+
+Goal: make macro factor collection fully automatic. Do not keep CSV upload in the core workflow.
 
 Data sources:
 
@@ -79,7 +285,26 @@ V2.0 acceptance criteria:
 - The app still runs if any macro source is unavailable.
 - Factor View clearly distinguishes available, stale, and missing data.
 
-## V2.1 Machine Learning
+## V2.4 P2 Data Provider Architecture
+
+Abstract data sources behind provider interfaces so strategy logic does not depend directly on yfinance.
+
+Suggested provider structure:
+
+- `YFinanceProvider`
+- `FREDProvider`
+- `RBAProvider`
+- `TreasuryProvider`
+- `OANDAProvider` placeholder
+- `CSVProvider` for offline tests only, not user-facing workflow
+
+Acceptance criteria:
+
+- Data collection code is separate from signal logic.
+- Providers normalize into common market/macro dataframes.
+- Tests can use offline fixtures without network access.
+
+## V2.5 P2 Machine Learning
 
 Goal: add a transparent ML research layer that compares a model against the existing rule-based strategy.
 

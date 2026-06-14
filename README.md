@@ -1,24 +1,32 @@
-# AlphaFX AUD/USD Quant Agent
+# AlphaFX
 
-AI-agent-style quantitative research app for AUD/USD directional signals over a 20 to 60 trading day horizon.
+AlphaFX is an explainable macro-factor research platform for AUD/USD directional signals.
 
-V1 focuses on:
+It combines macro indicators, factor scoring, historical calibration, walk-forward backtesting, and AI-style explanations to support FX research and paper trading decisions.
 
-- AUD/USD market data collection with `yfinance`
-- SQLite persistence
-- Feature engineering
-- Score-based quant signals
-- Backtesting
-- Paper-trade risk suggestions
-- AI-style natural-language explanation without requiring an LLM
-- Streamlit dashboard
+AlphaFX is not an AI Forex Bot, an automated trading robot, or a profit-generation system.
 
-Not included in V1:
+## Scope
 
-- Live trading
-- IBKR integration
-- Options or barrier products
-- Structured FX products
+The project focuses only on AUD/USD until the research process is stable.
+
+Core principles:
+
+- Quant models generate signals.
+- AI-style agents explain, challenge, and summarize signals.
+- Probabilities should be calibrated from history where possible, not asserted as certainty.
+- Backtests must be transparent about assumptions, costs, and limitations.
+- Research and paper trading come before any broker integration.
+
+## Risk Notice
+
+This software is for research and education only.
+
+- Not financial advice.
+- Not a profit guarantee.
+- No live trading in V1 or V2.
+- Research and paper trading only.
+- FX trading involves substantial risk, including leverage, spread, slippage, and regime-change risk.
 
 ## Quick Start
 
@@ -37,14 +45,14 @@ pytest
 
 ## Macro Data
 
-V2 should make macro factors one-click by downloading data automatically:
+The next planned data upgrade should make macro factors one-click by downloading data automatically:
 
 - US2Y from FRED `DGS2`
 - AU2Y from the RBA F2 capital market yields table
 - Iron ore from FRED `PIORECRUSDM`
 
-CSV upload is not planned for V2. If a source is unavailable, the app should keep running and clearly mark that factor as unavailable or stale.
+CSV upload is not planned for the core workflow. If a source is unavailable, the app should keep running and clearly mark that factor as unavailable or stale.
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for planned versions. The next branch of work is V2: first automate macro data collection, then add a machine-learning research layer that compares against the current rule-based signal engine without adding live trading.
+See [ROADMAP.md](ROADMAP.md) for planned versions and [DESIGN.md](DESIGN.md) for the planned professional research-platform architecture.
