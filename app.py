@@ -11,22 +11,19 @@ from alphafx.agents import (
     BacktestAgent,
     ContrarianAgent,
     DataAgent,
+    FactorDiagnosticsAgent,
     FeatureAgent,
     JudgeAgent,
+    PaperJournalAgent,
     QuantSignalAgent,
     RiskAgent,
+    SignalDiagnosticsAgent,
+    WalkForwardAgent,
 )
 from alphafx.config import DEFAULT_SYMBOLS
 
 
-st.set_page_config(page_title="AlphaFX AUD/USD Quant Agent", page_icon="FX", layout="wide")
-
-
-@st.cache_data(show_spinner=False)
-def parse_optional_csv(uploaded_file) -> pd.DataFrame | None:
-    if uploaded_file is None:
-        return None
-    return pd.read_csv(uploaded_file)
+st.set_page_config(page_title="AlphaFX AUD/USD Research Platform", page_icon="FX", layout="wide")
 
 
 def fmt_pct(value: float | None) -> str:
@@ -74,34 +71,38 @@ with st.sidebar:
     start = st.date_input("Start date", default_start)
     end = st.date_input("End date", default_end)
     leverage = st.slider("Paper leverage", min_value=1.0, max_value=5.0, value=2.0, step=0.5)
-    au2y_upload = st.file_uploader("AU2Y CSV", type=["csv"])
-    us2y_upload = st.file_uploader("US2Y CSV", type=["csv"])
-    iron_upload = st.file_uploader("Iron ore CSV", type=["csv"])
-    refresh = st.button("Download / Refresh", type="primary", use_container_width=True)
+    st.caption("Research and paper trading only. No live order execution.")
+    refresh = st.button("Download market + macro data", type="primary", use_container_width=True)
 
 data_agent = DataAgent()
 feature_agent = FeatureAgent()
 signal_agent = QuantSignalAgent()
+diagnostics_agent = SignalDiagnosticsAgent()
 risk_agent = RiskAgent()
 backtest_agent = BacktestAgent()
+walk_forward_agent = WalkForwardAgent()
+factor_diagnostics_agent = FactorDiagnosticsAgent()
+paper_journal_agent = PaperJournalAgent()
 explain_agent = AIExplanationAgent()
 contrarian_agent = ContrarianAgent()
 judge_agent = JudgeAgent()
 
 if refresh:
-    with st.spinner("Downloading yfinance data..."):
+    with st.spinner("Downloading market and macro data..."):
         data_agent.download_market_data(start, end)
+        data_agent.download_macro_data(start, end)
 
 market_data = data_agent.load_market_data()
 if market_data.empty:
-    st.info("Use the sidebar to download AUD/USD, DXY, and VIX data.")
+    st.info("Use the sidebar to download AUD/USD, DXY, VIX, and macro data.")
     st.stop()
 
-au2y = parse_optional_csv(au2y_upload)
-us2y = parse_optional_csv(us2y_upload)
-iron_ore = parse_optional_csv(iron_upload)
-features = feature_agent.build_features(market_data, au2y=au2y, us2y=us2y, iron_ore=iron_ore)
-signals = signal_agent.generate_signals(features)
+macro_data = data_agent.load_macro_data()
+features = feature_agent.build_features(market_data, macro_data=macro_data)
+raw_signals = signal_agent.generate_signals(features)
+calibration = diagnostics_agent.calibration_frame(market_data, raw_signals, horizon=20, min_samples=20)
+signals = signal_agent.generate_signals(features, calibration=calibration)
+forward_diagnostics = diagnostics_agent.forward_return_diagnostics(market_data, raw_signals)
 latest_feature, latest_signal = latest_non_empty(features, signals)
 
 if latest_signal.empty:
@@ -118,11 +119,13 @@ risk = risk_agent.suggest(
 explanation = explain_agent.explain(latest_signal, factor_table)
 contrarian = contrarian_agent.critique(latest_signal, factor_table)
 judgement = judge_agent.judge(latest_signal, risk, explanation, contrarian)
+aud_latest = market_data[market_data["symbol"] == DEFAULT_SYMBOLS.audusd].sort_values("date").iloc[-1]["close"]
+paper_journal_agent.record_signal(latest_feature, latest_signal, factor_table, risk, judgement["explanation"], audusd_price=float(aud_latest))
 
-st.title("AlphaFX AUD/USD Quant Agent")
-st.caption("Rule-based quant signal first. AI-style explanation second. Paper trading only.")
+st.title("AlphaFX")
+st.caption("Explainable macro-factor research platform for AUD/USD directional signals. Not financial advice. Not a profit guarantee.")
 
-tabs = st.tabs(["Dashboard", "Factor View", "Backtest", "AI Report"])
+tabs = st.tabs(["Dashboard", "Factor View", "Backtest", "Signal Diagnostics", "Validation", "Paper Journal", "AI Report"])
 
 with tabs[0]:
     st.subheader("Latest AUD/USD Signal")
@@ -137,6 +140,7 @@ with tabs[0]:
 
     with st.expander("Data completeness"):
         st.dataframe(data_agent.completeness_report(market_data), use_container_width=True)
+        st.dataframe(data_agent.macro_status_report(macro_data), use_container_width=True)
 
 with tabs[1]:
     st.subheader("Factor Contributions")
@@ -164,7 +168,11 @@ with tabs[2]:
     bt_end = col2.date_input("Backtest end", end, key="bt_end")
     holding = col3.number_input("Holding period", min_value=5, max_value=60, value=20, step=5)
     cost = col4.number_input("Transaction cost bps", min_value=0.0, max_value=50.0, value=2.0, step=0.5)
-    bt_data, metrics = backtest_agent.run(market_data, signals, bt_start, bt_end, holding, leverage, cost)
+    c1, c2, c3 = st.columns(3)
+    spread = c1.number_input("Spread bps", min_value=0.0, max_value=50.0, value=1.0, step=0.5)
+    slippage = c2.number_input("Slippage bps", min_value=0.0, max_value=50.0, value=1.0, step=0.5)
+    rollover = c3.number_input("Rollover bps / day placeholder", min_value=0.0, max_value=10.0, value=0.0, step=0.1)
+    bt_data, metrics = backtest_agent.run(market_data, signals, bt_start, bt_end, holding, leverage, cost, spread, slippage, rollover)
 
     metric_cols = st.columns(6)
     for col, key in zip(
@@ -178,8 +186,55 @@ with tabs[2]:
         st.plotly_chart(px.line(bt_data, x="date", y="equity", title="Equity Curve"), use_container_width=True)
         st.plotly_chart(px.area(bt_data, x="date", y="drawdown", title="Drawdown"), use_container_width=True)
         st.dataframe(pd.DataFrame([metrics]), use_container_width=True)
+        if hasattr(backtest_agent, "last_trades") and not backtest_agent.last_trades.empty:
+            st.subheader("Trade List")
+            st.dataframe(backtest_agent.last_trades, use_container_width=True, hide_index=True)
+        benchmark_keys = [k for k in metrics if k.startswith("benchmark_")]
+        st.subheader("Benchmarks")
+        st.dataframe(
+            pd.DataFrame(
+                [{"benchmark": k.replace("benchmark_", "").replace("_return", "").replace("_", " "), "return": metrics[k]} for k in benchmark_keys]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 with tabs[3]:
+    st.subheader("Signal Diagnostics")
+    st.caption("Forward-return statistics are historical diagnostics, not a profit forecast.")
+    if forward_diagnostics.empty:
+        st.info("Not enough history for signal diagnostics yet.")
+    else:
+        st.dataframe(forward_diagnostics, use_container_width=True, hide_index=True)
+
+    st.subheader("Calibration")
+    st.write(f"Latest probability source: `{latest_signal.get('probability_source', 'fallback_score_map')}`")
+    st.write(f"Calibration sample size: `{int(latest_signal.get('calibration_sample_size', 0))}`")
+
+with tabs[4]:
+    st.subheader("Walk-Forward Validation")
+    wf = walk_forward_agent.run(market_data, features)
+    if wf.empty:
+        st.info("Not enough history for the default 3-year train / 6-month test walk-forward run.")
+    else:
+        st.dataframe(wf, use_container_width=True, hide_index=True)
+
+    st.subheader("Factor Diagnostics")
+    factor_diag = factor_diagnostics_agent.analyze(features)
+    if factor_diag.empty:
+        st.info("Not enough complete feature history for factor diagnostics.")
+    else:
+        st.dataframe(factor_diag, use_container_width=True, hide_index=True)
+
+with tabs[5]:
+    st.subheader("Paper Trade Journal")
+    journal = paper_journal_agent.load()
+    if journal.empty:
+        st.info("No paper journal records yet.")
+    else:
+        st.dataframe(journal, use_container_width=True, hide_index=True)
+
+with tabs[6]:
     st.subheader("AI Report")
     bullish = factor_table[factor_table["stance"] == "bullish"]["factor"].tolist()
     bearish = factor_table[factor_table["stance"] == "bearish"]["factor"].tolist()

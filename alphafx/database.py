@@ -54,6 +54,37 @@ CREATE TABLE IF NOT EXISTS signals (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS macro_data (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    value REAL,
+    source TEXT,
+    frequency TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(date, symbol)
+);
+
+CREATE TABLE IF NOT EXISTS paper_journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL UNIQUE,
+    audusd_price REAL,
+    signal TEXT,
+    score REAL,
+    calibrated_probability REAL,
+    factor_values TEXT,
+    factor_contributions TEXT,
+    recommended_position TEXT,
+    stop_loss REAL,
+    take_profit REAL,
+    explanation TEXT,
+    entry_price REAL,
+    exit_price REAL,
+    realised_pnl REAL,
+    status TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS backtest_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     strategy TEXT,
@@ -129,6 +160,84 @@ class Database:
                 parse_dates=["date"],
             )
 
+    def upsert_macro_data(self, frame: pd.DataFrame) -> None:
+        if frame.empty:
+            return
+        columns = ["date", "symbol", "value", "source", "frequency"]
+        out = frame.copy()
+        out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+        rows = out[columns].where(pd.notna(out[columns]), None).to_records(index=False)
+        sql = """
+        INSERT INTO macro_data (date, symbol, value, source, frequency)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(date, symbol) DO UPDATE SET
+            value = excluded.value,
+            source = excluded.source,
+            frequency = excluded.frequency
+        """
+        with self.connect() as conn:
+            conn.executemany(sql, rows)
+
+    def load_macro_data(self, symbols: Iterable[str] | None = None) -> pd.DataFrame:
+        params: list[str] = []
+        where = ""
+        if symbols:
+            params = list(symbols)
+            placeholders = ",".join("?" for _ in params)
+            where = f"WHERE symbol IN ({placeholders})"
+        with self.connect() as conn:
+            return pd.read_sql_query(
+                f"SELECT * FROM macro_data {where} ORDER BY date",
+                conn,
+                params=params,
+                parse_dates=["date"],
+            )
+
+    def upsert_paper_journal(self, row: dict[str, object]) -> None:
+        columns = [
+            "date",
+            "audusd_price",
+            "signal",
+            "score",
+            "calibrated_probability",
+            "factor_values",
+            "factor_contributions",
+            "recommended_position",
+            "stop_loss",
+            "take_profit",
+            "explanation",
+            "entry_price",
+            "exit_price",
+            "realised_pnl",
+            "status",
+        ]
+        values = [row.get(column) for column in columns]
+        sql = f"""
+        INSERT INTO paper_journal ({", ".join(columns)})
+        VALUES ({", ".join("?" for _ in columns)})
+        ON CONFLICT(date) DO UPDATE SET
+            audusd_price = excluded.audusd_price,
+            signal = excluded.signal,
+            score = excluded.score,
+            calibrated_probability = excluded.calibrated_probability,
+            factor_values = excluded.factor_values,
+            factor_contributions = excluded.factor_contributions,
+            recommended_position = excluded.recommended_position,
+            stop_loss = excluded.stop_loss,
+            take_profit = excluded.take_profit,
+            explanation = excluded.explanation,
+            entry_price = excluded.entry_price,
+            exit_price = excluded.exit_price,
+            realised_pnl = excluded.realised_pnl,
+            status = excluded.status
+        """
+        with self.connect() as conn:
+            conn.execute(sql, values)
+
+    def load_paper_journal(self) -> pd.DataFrame:
+        with self.connect() as conn:
+            return pd.read_sql_query("SELECT * FROM paper_journal ORDER BY date", conn, parse_dates=["date"])
+
     def save_features(self, features: pd.DataFrame) -> None:
         if features.empty:
             return
@@ -198,4 +307,3 @@ class Database:
         out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
         with self.connect() as conn:
             conn.executemany(sql, out[columns].where(pd.notna(out[columns]), None).to_records(index=False))
-

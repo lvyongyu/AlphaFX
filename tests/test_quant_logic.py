@@ -3,12 +3,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from alphafx.agents import BacktestAgent, FeatureAgent, QuantSignalAgent
+from alphafx.agents import BacktestAgent, FeatureAgent, QuantSignalAgent, SignalDiagnosticsAgent
 from alphafx.config import DEFAULT_SYMBOLS
+from alphafx.data.fred_provider import FREDProvider
+from alphafx.data.rba_provider import RBAProvider
 
 
 def sample_market_data() -> pd.DataFrame:
-    dates = pd.bdate_range("2024-01-01", periods=90)
+    dates = pd.bdate_range("2024-01-01", periods=160)
     rows = []
     for i, dt in enumerate(dates):
         rows.extend(
@@ -39,6 +41,7 @@ def test_score_calculation_and_signal_mapping():
     assert latest["vix_score"] == 1
     assert latest["signal"] == "bullish"
     assert latest["probability"] == 0.60
+    assert latest["probability_source"] == "fallback_score_map"
 
 
 def test_signal_mapping_thresholds():
@@ -87,3 +90,62 @@ def test_sharpe_calculation():
     assert BacktestAgent.sharpe(returns) > 0
     assert BacktestAgent.sharpe(pd.Series([0.0, 0.0])) == 0.0
 
+
+def test_forward_return_diagnostics():
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    signals = QuantSignalAgent().generate_signals(features)
+    diagnostics = SignalDiagnosticsAgent().forward_return_diagnostics(market, signals, horizons=(20,))
+    bullish = diagnostics[diagnostics["signal"] == "bullish"].iloc[0]
+    assert bullish["sample_size"] > 0
+    assert bullish["hit_rate"] == 1.0
+
+
+def test_calibrated_probability_uses_prior_outcomes():
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    raw = QuantSignalAgent().generate_signals(features)
+    calibration = SignalDiagnosticsAgent().calibration_frame(market, raw, horizon=20, min_samples=5)
+    calibrated = QuantSignalAgent().generate_signals(features, calibration=calibration)
+    active = calibrated[calibrated["probability_source"] == "historical_calibration"]
+    assert not active.empty
+    assert active["calibration_sample_size"].min() >= 5
+
+
+def test_trade_level_backtest_next_day_entry_and_costs():
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    signals = QuantSignalAgent().generate_signals(features)
+    agent = BacktestAgent()
+    _, metrics = agent.run(market, signals, "2024-02-01", "2024-07-01", holding_period=20, transaction_cost_bps=2, spread_bps=1, slippage_bps=1)
+    trades = agent.last_trades
+    assert not trades.empty
+    first = trades.iloc[0]
+    assert pd.to_datetime(first["entry_date"]) > pd.to_datetime(first["signal_date"])
+    assert first["holding_period"] == 20
+    assert first["cost"] > 0
+    assert metrics["number_of_trades"] == len(trades)
+
+
+def test_benchmark_random_is_deterministic():
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    signals = QuantSignalAgent().generate_signals(features)
+    data_1, metrics_1 = BacktestAgent().run(market, signals, "2024-02-01", "2024-07-01")
+    data_2, metrics_2 = BacktestAgent().run(market, signals, "2024-02-01", "2024-07-01")
+    assert metrics_1["benchmark_random_return"] == metrics_2["benchmark_random_return"]
+    assert len(data_1) == len(data_2)
+
+
+def test_fred_parser_normalizes_macro_data():
+    raw = pd.DataFrame({"observation_date": ["2024-01-01", "2024-01-02"], "DGS2": ["4.2", "."]})
+    parsed = FREDProvider("DGS2", "US2Y", "daily").parse(raw)
+    assert list(parsed["symbol"].unique()) == ["US2Y"]
+    assert len(parsed) == 1
+
+
+def test_rba_parser_normalizes_au2y_data():
+    raw = pd.DataFrame({"Date": ["2024-01-01", "2024-01-02"], "Australian Government 2 year bond": ["3.5", "3.6"]})
+    parsed = RBAProvider().parse_au2y(raw)
+    assert list(parsed["symbol"].unique()) == ["AU2Y"]
+    assert len(parsed) == 2

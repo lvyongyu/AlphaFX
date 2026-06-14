@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 from .config import DEFAULT_SYMBOLS
+from .data.fred_provider import FREDProvider
+from .data.rba_provider import RBAProvider
+from .data.yfinance_provider import YFinanceProvider
 from .database import Database
 
 
@@ -39,6 +42,7 @@ def _score_negative(value: float | None) -> int | float:
 class DataAgent:
     def __init__(self, db: Database | None = None) -> None:
         self.db = db or Database()
+        self.market_provider = YFinanceProvider()
 
     def download_market_data(
         self,
@@ -53,29 +57,41 @@ class DataAgent:
         }
         frames: list[pd.DataFrame] = []
         for symbol in symbols.values():
-            raw = yf.download(symbol, start=start, end=end, progress=False, auto_adjust=False)
-            if raw.empty:
-                continue
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw.columns = raw.columns.get_level_values(0)
-            frame = pd.DataFrame(
-                {
-                    "date": _to_date_column(raw.index),
-                    "symbol": symbol,
-                    "open": raw.get("Open"),
-                    "high": raw.get("High"),
-                    "low": raw.get("Low"),
-                    "close": raw.get("Close"),
-                    "source": "yfinance",
-                }
-            ).dropna(subset=["close"])
-            frames.append(frame)
+            frame = self.market_provider.download(symbol, start, end)
+            if not frame.empty:
+                frames.append(frame)
         data = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         self.db.upsert_market_data(data)
         return data
 
+    def download_macro_data(self, start: date | str, end: date | str | None = None) -> pd.DataFrame:
+        providers = [
+            FREDProvider("DGS2", "US2Y", "daily"),
+            FREDProvider("PIORECRUSDM", "IRON_ORE", "monthly"),
+        ]
+        frames: list[pd.DataFrame] = []
+        for provider in providers:
+            try:
+                frame = provider.download(start, end)
+                if not frame.empty:
+                    frames.append(frame)
+            except Exception:
+                continue
+        try:
+            au2y = RBAProvider().download_au2y(start, end)
+            if not au2y.empty:
+                frames.append(au2y)
+        except Exception:
+            pass
+        data = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        self.db.upsert_macro_data(data)
+        return data
+
     def load_market_data(self) -> pd.DataFrame:
         return self.db.load_market_data([DEFAULT_SYMBOLS.audusd, DEFAULT_SYMBOLS.dxy, DEFAULT_SYMBOLS.vix])
+
+    def load_macro_data(self) -> pd.DataFrame:
+        return self.db.load_macro_data(["US2Y", "AU2Y", "IRON_ORE"])
 
     def completeness_report(self, market_data: pd.DataFrame) -> pd.DataFrame:
         if market_data.empty:
@@ -91,6 +107,24 @@ class DataAgent:
             .reset_index()
         )
 
+    def macro_status_report(self, macro_data: pd.DataFrame) -> pd.DataFrame:
+        if macro_data.empty:
+            return pd.DataFrame(columns=["symbol", "source", "frequency", "latest_date", "rows", "status"])
+        today = pd.Timestamp.today().normalize()
+        report = (
+            macro_data.groupby("symbol")
+            .agg(
+                source=("source", "last"),
+                frequency=("frequency", "last"),
+                latest_date=("date", "max"),
+                rows=("value", "size"),
+            )
+            .reset_index()
+        )
+        report["age_days"] = (today - pd.to_datetime(report["latest_date"])).dt.days
+        report["status"] = np.where(report["age_days"] > 45, "stale", "available")
+        return report
+
 
 class FeatureAgent:
     def __init__(self, db: Database | None = None) -> None:
@@ -99,6 +133,7 @@ class FeatureAgent:
     def build_features(
         self,
         market_data: pd.DataFrame,
+        macro_data: pd.DataFrame | None = None,
         au2y: pd.DataFrame | None = None,
         us2y: pd.DataFrame | None = None,
         iron_ore: pd.DataFrame | None = None,
@@ -124,6 +159,11 @@ class FeatureAgent:
         features["vix_level"] = vix if vix is not None else np.nan
         features["vix_change_20d"] = vix.diff(20) if vix is not None else np.nan
 
+        if macro_data is not None and not macro_data.empty:
+            au2y = au2y if au2y is not None else self._macro_symbol_frame(macro_data, "AU2Y")
+            us2y = us2y if us2y is not None else self._macro_symbol_frame(macro_data, "US2Y")
+            iron_ore = iron_ore if iron_ore is not None else self._macro_symbol_frame(macro_data, "IRON_ORE")
+
         spread = self._build_yield_spread(features.index, au2y, us2y)
         features["yield_spread"] = spread
         features["yield_spread_change_20d"] = spread.diff(20) if spread is not None else np.nan
@@ -134,6 +174,12 @@ class FeatureAgent:
         features = features.reset_index().rename(columns={"index": "date"})
         self.db.save_features(features)
         return features
+
+    def _macro_symbol_frame(self, macro_data: pd.DataFrame, symbol: str) -> pd.DataFrame | None:
+        subset = macro_data[macro_data["symbol"] == symbol].copy()
+        if subset.empty:
+            return None
+        return subset.rename(columns={"value": "value"})[["date", "value"]]
 
     def factor_table(self, latest_feature: pd.Series, latest_signal: pd.Series) -> pd.DataFrame:
         rows = [
@@ -182,7 +228,7 @@ class QuantSignalAgent:
     def __init__(self, db: Database | None = None) -> None:
         self.db = db or Database()
 
-    def generate_signals(self, features: pd.DataFrame) -> pd.DataFrame:
+    def generate_signals(self, features: pd.DataFrame, calibration: pd.DataFrame | dict[str, float] | None = None) -> pd.DataFrame:
         if features.empty:
             return pd.DataFrame()
         out = features[["date"]].copy()
@@ -194,7 +240,25 @@ class QuantSignalAgent:
         score_cols = ["aud_momentum_score", "dxy_score", "yield_score", "ironore_score", "vix_score"]
         out["score"] = out[score_cols].sum(axis=1, min_count=1)
         out["signal"] = out["score"].apply(self.map_signal)
-        out["probability"] = out["score"].apply(self.map_probability)
+        out["fallback_probability"] = out["score"].apply(self.map_probability)
+        out["probability"] = out["fallback_probability"]
+        out["probability_source"] = "fallback_score_map"
+        out["calibration_sample_size"] = 0
+        if isinstance(calibration, dict) and calibration:
+            mapped = out["signal"].map(calibration)
+            calibrated = mapped.notna()
+            out.loc[calibrated, "probability"] = mapped[calibrated]
+            out.loc[calibrated, "probability_source"] = "historical_calibration"
+            out.loc[calibrated, "calibration_sample_size"] = -1
+        elif isinstance(calibration, pd.DataFrame) and not calibration.empty:
+            out = out.drop(columns=["calibration_sample_size"]).merge(
+                calibration[["date", "calibrated_probability", "calibration_sample_size"]], on="date", how="left"
+            )
+            out["calibration_sample_size"] = out["calibration_sample_size"].fillna(0).astype(int)
+            calibrated = out["calibrated_probability"].notna()
+            out.loc[calibrated, "probability"] = out.loc[calibrated, "calibrated_probability"]
+            out.loc[calibrated, "probability_source"] = "historical_calibration"
+            out = out.drop(columns=["calibrated_probability"])
         out["confidence"] = out.apply(lambda row: self.map_confidence(row["score"], row[score_cols].notna().sum()), axis=1)
         self.db.save_signals(out)
         return out
@@ -231,6 +295,118 @@ class QuantSignalAgent:
         return "Low"
 
 
+class SignalDiagnosticsAgent:
+    def forward_return_diagnostics(
+        self,
+        market_data: pd.DataFrame,
+        signals: pd.DataFrame,
+        horizons: tuple[int, ...] = (20, 40, 60),
+    ) -> pd.DataFrame:
+        data = self._signal_price_frame(market_data, signals)
+        if data.empty:
+            return pd.DataFrame()
+        rows: list[dict[str, object]] = []
+        for horizon in horizons:
+            frame = data.copy()
+            frame["forward_return"] = frame["close"].shift(-horizon) / frame["close"] - 1.0
+            frame = frame.dropna(subset=["signal", "forward_return"])
+            for signal, group in frame.groupby("signal"):
+                returns = group["forward_return"].dropna()
+                directional = self.directional_outcome(signal, returns)
+                rows.append(
+                    {
+                        "signal": signal,
+                        "horizon": horizon,
+                        "sample_size": int(len(returns)),
+                        "average_forward_return": float(returns.mean()) if len(returns) else 0.0,
+                        "median_forward_return": float(returns.median()) if len(returns) else 0.0,
+                        "hit_rate": float(directional.mean()) if len(directional) else 0.0,
+                        "win_loss_ratio": self.win_loss_ratio(returns),
+                        "max_drawdown": BacktestAgent.max_drawdown_from_returns(self.strategy_returns(signal, returns)),
+                        "sharpe": BacktestAgent.sharpe(self.strategy_returns(signal, returns)),
+                        "profit_factor": BacktestAgent.profit_factor(self.strategy_returns(signal, returns)),
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def calibration_frame(
+        self,
+        market_data: pd.DataFrame,
+        signals: pd.DataFrame,
+        horizon: int = 20,
+        min_samples: int = 20,
+    ) -> pd.DataFrame:
+        data = self._signal_price_frame(market_data, signals)
+        if data.empty:
+            return pd.DataFrame(columns=["date", "calibrated_probability", "calibration_sample_size"])
+        data["forward_return"] = data["close"].shift(-horizon) / data["close"] - 1.0
+        probabilities: list[dict[str, object]] = []
+        for idx, row in data.iterrows():
+            if row["signal"] == "neutral":
+                continue
+            known = data.iloc[: max(0, idx - horizon + 1)].dropna(subset=["forward_return", "signal"])
+            known = known[known["signal"] == row["signal"]]
+            if len(known) < min_samples:
+                continue
+            hits = self.directional_outcome(str(row["signal"]), known["forward_return"])
+            probabilities.append(
+                {
+                    "date": row["date"],
+                    "calibrated_probability": float(hits.mean()),
+                    "calibration_sample_size": int(len(hits)),
+                }
+            )
+        return pd.DataFrame(probabilities)
+
+    def calibration_map(
+        self,
+        market_data: pd.DataFrame,
+        signals: pd.DataFrame,
+        horizon: int = 20,
+        min_samples: int = 10,
+    ) -> dict[str, float]:
+        diagnostics = self.forward_return_diagnostics(market_data, signals, horizons=(horizon,))
+        if diagnostics.empty:
+            return {}
+        diagnostics = diagnostics[diagnostics["signal"].isin(["bullish", "bearish"])]
+        eligible = diagnostics[diagnostics["sample_size"] >= min_samples]
+        return {str(row["signal"]): float(row["hit_rate"]) for _, row in eligible.iterrows()}
+
+    def _signal_price_frame(self, market_data: pd.DataFrame, signals: pd.DataFrame) -> pd.DataFrame:
+        aud = (
+            market_data[market_data["symbol"] == DEFAULT_SYMBOLS.audusd]
+            .assign(date=lambda x: pd.to_datetime(x["date"]))
+            .sort_values("date")[["date", "close"]]
+            .reset_index(drop=True)
+        )
+        if aud.empty or signals.empty:
+            return pd.DataFrame()
+        sig_cols = ["date", "signal", "score", "probability"]
+        sig = signals.assign(date=lambda x: pd.to_datetime(x["date"]))[[c for c in sig_cols if c in signals.columns]]
+        return aud.merge(sig, on="date", how="left").ffill().reset_index(drop=True)
+
+    def strategy_returns(self, signal: str, returns: pd.Series) -> pd.Series:
+        if signal == "bullish":
+            return returns
+        if signal == "bearish":
+            return -returns
+        return pd.Series(np.zeros(len(returns)), index=returns.index)
+
+    def directional_outcome(self, signal: str, returns: pd.Series) -> pd.Series:
+        if signal == "bullish":
+            return returns > 0
+        if signal == "bearish":
+            return returns < 0
+        return returns.abs() <= 0.005
+
+    def win_loss_ratio(self, returns: pd.Series) -> float:
+        wins = returns[returns > 0]
+        losses = returns[returns < 0]
+        if wins.empty or losses.empty:
+            return 0.0
+        return float(abs(wins.mean() / losses.mean()))
+
+
 @dataclass
 class RiskSuggestion:
     action: str
@@ -239,6 +415,8 @@ class RiskSuggestion:
     stop_loss: float
     take_profit: float
     warning: str
+    max_risk_per_trade: float = 0.01
+    regime: str = "normal"
 
 
 class RiskAgent:
@@ -249,12 +427,17 @@ class RiskAgent:
         volatility: float | None,
         max_drawdown: float | None = None,
         user_leverage: float = 2.0,
+        max_risk_per_trade: float = 0.01,
     ) -> RiskSuggestion:
         leverage = min(max(float(user_leverage), 1.0), 5.0)
         high_vol = pd.notna(volatility) and volatility > 0.18
+        extreme_vol = pd.notna(volatility) and volatility > 0.25
         if high_vol:
             leverage = min(leverage, 2.0)
-        if signal == "bullish" and probability >= 0.60:
+        if extreme_vol:
+            action = "NO TRADE"
+            leverage = 1.0
+        elif signal == "bullish" and probability >= 0.60:
             action = "BUY AUD/USD"
         elif signal == "bearish" and probability <= 0.40:
             action = "SELL AUD/USD"
@@ -262,17 +445,22 @@ class RiskAgent:
             action = "NO TRADE"
             leverage = 1.0
         warning_parts = ["Paper trading only. No live order execution is implemented."]
+        if extreme_vol:
+            warning_parts.append("Extreme volatility regime: no-trade guard is active.")
         if high_vol:
             warning_parts.append("Volatility is elevated, so leverage is capped.")
         if max_drawdown is not None and pd.notna(max_drawdown) and max_drawdown < -0.15:
             warning_parts.append("Backtest drawdown is material; reduce size or avoid the trade.")
+        vol_stop = max(0.01, min(0.06, float(volatility) / 5.0)) if pd.notna(volatility) else 0.02
         return RiskSuggestion(
             action=action,
             position_size="Small" if high_vol or action == "NO TRADE" else "Standard",
             leverage=leverage,
-            stop_loss=0.02,
-            take_profit=0.04,
+            stop_loss=vol_stop,
+            take_profit=vol_stop * 2.0,
             warning=" ".join(warning_parts),
+            max_risk_per_trade=max_risk_per_trade,
+            regime="extreme_vol_no_trade" if extreme_vol else "elevated_vol" if high_vol else "normal",
         )
 
 
@@ -286,30 +474,108 @@ class BacktestAgent:
         holding_period: int = 20,
         leverage: float = 2.0,
         transaction_cost_bps: float = 2.0,
+        spread_bps: float = 0.0,
+        slippage_bps: float = 0.0,
+        rollover_bps_per_day: float = 0.0,
     ) -> tuple[pd.DataFrame, dict[str, float]]:
         aud = (
             market_data[market_data["symbol"] == DEFAULT_SYMBOLS.audusd]
             .assign(date=lambda x: pd.to_datetime(x["date"]))
             .sort_values("date")[["date", "close"]]
         )
-        sig = signals.assign(date=lambda x: pd.to_datetime(x["date"]))[["date", "signal"]]
+        sig_cols = [c for c in ["date", "signal", "score", "probability"] if c in signals.columns]
+        sig = signals.assign(date=lambda x: pd.to_datetime(x["date"]))[sig_cols]
         data = aud.merge(sig, on="date", how="left").ffill()
         data = data[(data["date"] >= pd.to_datetime(start_date)) & (data["date"] <= pd.to_datetime(end_date))].copy()
         if data.empty:
             return data, self.empty_metrics()
 
         data["daily_return"] = data["close"].pct_change().fillna(0.0)
-        data["position"] = data["signal"].map({"bullish": 1.0, "bearish": -1.0}).fillna(0.0)
-        data["position"] = data["position"].shift(1).fillna(0.0)
-        data["trade"] = data["position"].diff().abs().fillna(data["position"].abs())
-        cost = data["trade"] * (transaction_cost_bps / 10000.0)
-        data["strategy_return"] = data["position"] * data["daily_return"] * leverage - cost
+        trades = self.build_trades(
+            data.reset_index(drop=True),
+            holding_period=holding_period,
+            leverage=leverage,
+            transaction_cost_bps=transaction_cost_bps,
+            spread_bps=spread_bps,
+            slippage_bps=slippage_bps,
+            rollover_bps_per_day=rollover_bps_per_day,
+        )
+        data = self.apply_trades_to_daily_frame(data.reset_index(drop=True), trades, leverage=leverage)
         data["equity"] = (1.0 + data["strategy_return"]).cumprod()
         data["drawdown"] = data["equity"] / data["equity"].cummax() - 1.0
         data["future_return"] = data["close"].shift(-holding_period) / data["close"] - 1.0
-        data["trade_return"] = data["position"] * data["future_return"] * leverage
         metrics = self.calculate_metrics(data)
+        metrics.update(self.trade_metrics(trades))
+        metrics.update(self.benchmark_metrics(data, holding_period=holding_period))
+        self.last_trades = trades
         return data, metrics
+
+    def build_trades(
+        self,
+        data: pd.DataFrame,
+        holding_period: int,
+        leverage: float,
+        transaction_cost_bps: float,
+        spread_bps: float,
+        slippage_bps: float,
+        rollover_bps_per_day: float,
+    ) -> pd.DataFrame:
+        trades: list[dict[str, object]] = []
+        i = 0
+        round_trip_cost = ((transaction_cost_bps + spread_bps + slippage_bps) * 2.0) / 10000.0
+        while i < len(data) - 1:
+            signal = str(data.iloc[i].get("signal", "neutral"))
+            position = 1.0 if signal == "bullish" else -1.0 if signal == "bearish" else 0.0
+            if position == 0.0:
+                i += 1
+                continue
+            entry_idx = i + 1
+            exit_idx = min(entry_idx + int(holding_period), len(data) - 1)
+            if entry_idx >= exit_idx:
+                break
+            entry = data.iloc[entry_idx]
+            exit_ = data.iloc[exit_idx]
+            raw_return = (float(exit_["close"]) / float(entry["close"]) - 1.0) * position
+            rollover = (rollover_bps_per_day * (exit_idx - entry_idx)) / 10000.0
+            cost = round_trip_cost + rollover
+            trades.append(
+                {
+                    "signal_date": data.iloc[i]["date"],
+                    "entry_date": entry["date"],
+                    "exit_date": exit_["date"],
+                    "signal": signal,
+                    "score": data.iloc[i].get("score", np.nan),
+                    "probability": data.iloc[i].get("probability", np.nan),
+                    "position": position,
+                    "holding_period": int(exit_idx - entry_idx),
+                    "entry_price": float(entry["close"]),
+                    "exit_price": float(exit_["close"]),
+                    "raw_return": float(raw_return),
+                    "transaction_cost": float(round_trip_cost),
+                    "rollover_cost": float(rollover),
+                    "cost": float(cost),
+                    "realised_return": float(raw_return * leverage - cost),
+                    "status": "closed",
+                }
+            )
+            i = exit_idx + 1
+        return pd.DataFrame(trades)
+
+    def apply_trades_to_daily_frame(self, data: pd.DataFrame, trades: pd.DataFrame, leverage: float = 1.0) -> pd.DataFrame:
+        out = data.copy()
+        out["position"] = 0.0
+        out["trade"] = 0.0
+        if trades.empty:
+            out["strategy_return"] = 0.0
+            return out
+        for _, trade in trades.iterrows():
+            mask = (out["date"] >= trade["entry_date"]) & (out["date"] <= trade["exit_date"])
+            out.loc[mask, "position"] = float(trade["position"])
+            out.loc[out["date"] == trade["exit_date"], "trade"] = 1.0
+        out["strategy_return"] = out["position"].shift(1).fillna(0.0) * out["daily_return"] * leverage
+        for _, trade in trades.iterrows():
+            out.loc[out["date"] == trade["exit_date"], "strategy_return"] -= float(trade["cost"])
+        return out
 
     @staticmethod
     def calculate_metrics(data: pd.DataFrame) -> dict[str, float]:
@@ -320,21 +586,50 @@ class BacktestAgent:
         annualized_return = data["equity"].iloc[-1] ** (252 / days) - 1.0
         sharpe = BacktestAgent.sharpe(data["strategy_return"])
         max_drawdown = float(data["drawdown"].min())
-        trades = data.loc[data["trade"] > 0, "trade_return"].dropna()
-        wins = trades[trades > 0]
-        losses = trades[trades < 0]
-        profit_factor = float(wins.sum() / abs(losses.sum())) if abs(losses.sum()) > 0 else np.inf
         return {
             "total_return": float(total_return),
             "annualized_return": float(annualized_return),
             "sharpe": float(sharpe),
             "max_drawdown": max_drawdown,
-            "win_rate": float((trades > 0).mean()) if len(trades) else 0.0,
-            "profit_factor": profit_factor,
-            "number_of_trades": int(len(trades)),
-            "average_trade": float(trades.mean()) if len(trades) else 0.0,
-            "best_trade": float(trades.max()) if len(trades) else 0.0,
-            "worst_trade": float(trades.min()) if len(trades) else 0.0,
+        }
+
+    @staticmethod
+    def trade_metrics(trades: pd.DataFrame) -> dict[str, float]:
+        if trades.empty:
+            return {
+                "win_rate": 0.0,
+                "profit_factor": 0.0,
+                "number_of_trades": 0,
+                "average_trade": 0.0,
+                "best_trade": 0.0,
+                "worst_trade": 0.0,
+            }
+        returns = trades["realised_return"].dropna()
+        return {
+            "win_rate": float((returns > 0).mean()) if len(returns) else 0.0,
+            "profit_factor": BacktestAgent.profit_factor(returns),
+            "number_of_trades": int(len(returns)),
+            "average_trade": float(returns.mean()) if len(returns) else 0.0,
+            "best_trade": float(returns.max()) if len(returns) else 0.0,
+            "worst_trade": float(returns.min()) if len(returns) else 0.0,
+        }
+
+    @staticmethod
+    def benchmark_metrics(data: pd.DataFrame, holding_period: int = 20) -> dict[str, float]:
+        daily = data["daily_return"].fillna(0.0)
+        close = data["close"]
+        rng = np.random.default_rng(42)
+        random_position = pd.Series(rng.choice([-1.0, 0.0, 1.0], len(data)), index=data.index).shift(1).fillna(0.0)
+        sma_fast = close.rolling(20).mean()
+        sma_slow = close.rolling(60).mean()
+        sma_position = pd.Series(np.where(sma_fast > sma_slow, 1.0, -1.0), index=data.index).shift(1).fillna(0.0)
+        momentum_position = pd.Series(np.where(close.pct_change(holding_period) > 0, 1.0, -1.0), index=data.index).shift(1).fillna(0.0)
+        return {
+            "benchmark_buy_hold_return": float((1.0 + daily).prod() - 1.0),
+            "benchmark_flat_return": 0.0,
+            "benchmark_random_return": float((1.0 + random_position * daily).prod() - 1.0),
+            "benchmark_sma_return": float((1.0 + sma_position * daily).prod() - 1.0),
+            "benchmark_momentum_return": float((1.0 + momentum_position * daily).prod() - 1.0),
         }
 
     @staticmethod
@@ -343,6 +638,22 @@ class BacktestAgent:
         if returns.empty or returns.std(ddof=0) == 0:
             return 0.0
         return float((returns.mean() / returns.std(ddof=0)) * np.sqrt(252))
+
+    @staticmethod
+    def profit_factor(returns: pd.Series) -> float:
+        returns = returns.dropna()
+        wins = returns[returns > 0]
+        losses = returns[returns < 0]
+        return float(wins.sum() / abs(losses.sum())) if abs(losses.sum()) > 0 else np.inf
+
+    @staticmethod
+    def max_drawdown_from_returns(returns: pd.Series) -> float:
+        returns = returns.dropna()
+        if returns.empty:
+            return 0.0
+        equity = (1.0 + returns).cumprod()
+        drawdown = equity / equity.cummax() - 1.0
+        return float(drawdown.min())
 
     @staticmethod
     def empty_metrics() -> dict[str, float]:
@@ -358,6 +669,141 @@ class BacktestAgent:
             "best_trade": 0.0,
             "worst_trade": 0.0,
         }
+
+
+class WalkForwardAgent:
+    def run(
+        self,
+        market_data: pd.DataFrame,
+        features: pd.DataFrame,
+        train_days: int = 252 * 3,
+        test_days: int = 126,
+        holding_period: int = 20,
+    ) -> pd.DataFrame:
+        if features.empty:
+            return pd.DataFrame()
+        features = features.assign(date=pd.to_datetime(features["date"])).sort_values("date").reset_index(drop=True)
+        rows: list[dict[str, object]] = []
+        start_idx = train_days
+        signal_agent = QuantSignalAgent()
+        diagnostics = SignalDiagnosticsAgent()
+        backtester = BacktestAgent()
+        while start_idx < len(features) - holding_period:
+            train = features.iloc[start_idx - train_days : start_idx].copy()
+            test = features.iloc[start_idx : min(start_idx + test_days, len(features))].copy()
+            if test.empty:
+                break
+            train_signals = signal_agent.generate_signals(train)
+            calibration = diagnostics.calibration_map(market_data, train_signals, horizon=holding_period, min_samples=10)
+            test_signals = signal_agent.generate_signals(test, calibration=calibration)
+            bt, metrics = backtester.run(market_data, test_signals, test["date"].min(), test["date"].max(), holding_period=holding_period)
+            in_bt, in_metrics = backtester.run(market_data, train_signals, train["date"].min(), train["date"].max(), holding_period=holding_period)
+            rows.append(
+                {
+                    "train_start": train["date"].min(),
+                    "train_end": train["date"].max(),
+                    "test_start": test["date"].min(),
+                    "test_end": test["date"].max(),
+                    "in_sample_sharpe": in_metrics["sharpe"],
+                    "out_sample_sharpe": metrics["sharpe"],
+                    "degradation_ratio": metrics["sharpe"] / in_metrics["sharpe"] if in_metrics["sharpe"] else 0.0,
+                    "out_sample_return": metrics["total_return"],
+                    "out_sample_drawdown": metrics["max_drawdown"],
+                    "trades": metrics["number_of_trades"],
+                }
+            )
+            start_idx += test_days
+        return pd.DataFrame(rows)
+
+
+class FactorDiagnosticsAgent:
+    feature_columns = [
+        "audusd_return_20d",
+        "audusd_return_60d",
+        "audusd_vol_20d",
+        "dxy_return_20d",
+        "dxy_return_60d",
+        "vix_level",
+        "vix_change_20d",
+        "yield_spread",
+        "yield_spread_change_20d",
+        "ironore_return_20d",
+    ]
+
+    def analyze(self, features: pd.DataFrame, horizon: int = 20) -> pd.DataFrame:
+        if features.empty:
+            return pd.DataFrame()
+        df = features.assign(date=pd.to_datetime(features["date"])).sort_values("date").copy()
+        df["future_return"] = df["audusd_return_20d"].shift(-horizon)
+        rows: list[dict[str, object]] = []
+        for column in [c for c in self.feature_columns if c in df.columns]:
+            pair = df[[column, "future_return"]].dropna()
+            if len(pair) < 10:
+                continue
+            corr = float(pair[column].corr(pair["future_return"]))
+            sign = np.sign(pair[column])
+            target = np.sign(pair["future_return"])
+            rows.append(
+                {
+                    "factor": column,
+                    "sample_size": int(len(pair)),
+                    "information_coefficient": corr,
+                    "coefficient_proxy": corr,
+                    "hit_contribution": float((sign == target).mean()),
+                    "stability": self._rolling_stability(pair[column], pair["future_return"]),
+                    "feature_importance": abs(corr),
+                }
+            )
+        return pd.DataFrame(rows).sort_values("feature_importance", ascending=False) if rows else pd.DataFrame()
+
+    def _rolling_stability(self, factor: pd.Series, target: pd.Series, window: int = 126) -> float:
+        if len(factor) < window * 2:
+            return 0.0
+        corrs = []
+        for start in range(0, len(factor) - window + 1, window):
+            corr = factor.iloc[start : start + window].corr(target.iloc[start : start + window])
+            if pd.notna(corr):
+                corrs.append(np.sign(corr))
+        return float(np.mean(corrs)) if corrs else 0.0
+
+
+class PaperJournalAgent:
+    def __init__(self, db: Database | None = None) -> None:
+        self.db = db or Database()
+
+    def record_signal(
+        self,
+        latest_feature: pd.Series,
+        latest_signal: pd.Series,
+        factor_table: pd.DataFrame,
+        risk: RiskSuggestion,
+        explanation: str,
+        audusd_price: float | None = None,
+    ) -> None:
+        if latest_signal.empty:
+            return
+        date_value = pd.to_datetime(latest_signal["date"]).strftime("%Y-%m-%d")
+        row = {
+            "date": date_value,
+            "audusd_price": audusd_price,
+            "signal": latest_signal.get("signal"),
+            "score": latest_signal.get("score"),
+            "calibrated_probability": latest_signal.get("probability"),
+            "factor_values": json.dumps(latest_feature.drop(labels=["date"], errors="ignore").to_dict(), default=str),
+            "factor_contributions": factor_table.to_json(orient="records"),
+            "recommended_position": risk.action,
+            "stop_loss": risk.stop_loss,
+            "take_profit": risk.take_profit,
+            "explanation": explanation,
+            "entry_price": None,
+            "exit_price": None,
+            "realised_pnl": None,
+            "status": "open" if risk.action != "NO TRADE" else "no_trade",
+        }
+        self.db.upsert_paper_journal(row)
+
+    def load(self) -> pd.DataFrame:
+        return self.db.load_paper_journal()
 
 
 class AIExplanationAgent:
