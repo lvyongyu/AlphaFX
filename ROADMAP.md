@@ -23,7 +23,7 @@ V1 includes:
 
 ## Next Version: V2 Research Upgrade
 
-Goal: make the app useful for a normal user who does not know where to find macro CSV files, then add a transparent ML research layer that predicts whether the future 20-trading-day AUD/USD return is positive.
+Goal: make the app useful for a normal user who should not need to find, download, format, or upload macro CSV files, then add a transparent ML research layer that predicts whether the future 20-trading-day AUD/USD return is positive.
 
 V2 is split into two phases:
 
@@ -32,9 +32,9 @@ V2 is split into two phases:
 
 ## V2.0 Macro Auto-Data Foundation
 
-Problem: V1 supports AU2Y, US2Y, and iron ore as CSV uploads, but most users will not know where to download these files or how to format them. If those factors stay missing, the factor view, rule signal, and future ML model are weaker.
+Problem: V1 supports AU2Y, US2Y, and iron ore as CSV uploads, but most users will not know where to download these files or how to format them. Keeping upload as a normal workflow makes the app feel unfinished and creates avoidable user burden. If those factors stay missing, the factor view, rule signal, and future ML model are weaker.
 
-Goal: make macro factor collection one-click by default, while keeping CSV upload as a manual override.
+Goal: make macro factor collection fully automatic. Do not keep CSV upload in the core V2 UI.
 
 Data sources:
 
@@ -60,10 +60,10 @@ V2.0 should update:
   - Build `yield_spread = AU2Y - US2Y` automatically.
   - Forward-fill lower-frequency iron ore data onto the market date index.
   - Mark stale values if a macro series has not updated within an expected window.
-  - Show whether each factor came from FRED, RBA, yfinance, CSV override, or is unavailable.
+  - Show whether each factor came from FRED, RBA, yfinance, is stale, or is unavailable.
 - UI:
   - Replace `Download / Refresh` with a clearer action such as `Download market + macro data`.
-  - Keep CSV upload under a `Manual data override` expander.
+  - Remove CSV upload controls for AU2Y, US2Y, and iron ore.
   - Add a data status panel that shows latest date, source, rows, and freshness for each input.
 - Tests:
   - FRED CSV parser.
@@ -77,7 +77,7 @@ V2.0 acceptance criteria:
 
 - A user can deploy the app, press one refresh button, and get AUD/USD, DXY, VIX, US2Y, AU2Y, and iron ore factors without manually downloading CSVs.
 - The app still runs if any macro source is unavailable.
-- Factor View clearly distinguishes available, stale, manually overridden, and missing data.
+- Factor View clearly distinguishes available, stale, and missing data.
 
 ## V2.1 Machine Learning
 

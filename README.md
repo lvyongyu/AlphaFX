@@ -37,18 +37,13 @@ pytest
 
 ## Macro Data
 
-V1 can run without AU/US yield or iron ore data. If you have CSVs, upload them in the Streamlit sidebar. Expected columns:
-
-- `date`
-- value column such as `close`, `yield`, `price`, or `value`
-
-V2 should make this easier for users by downloading macro data automatically:
+V2 should make macro factors one-click by downloading data automatically:
 
 - US2Y from FRED `DGS2`
 - AU2Y from the RBA F2 capital market yields table
 - Iron ore from FRED `PIORECRUSDM`
 
-CSV upload should remain as a manual override, not the default path.
+CSV upload is not planned for V2. If a source is unavailable, the app should keep running and clearly mark that factor as unavailable or stale.
 
 ## Roadmap
 
