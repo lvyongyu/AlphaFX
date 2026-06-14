@@ -42,3 +42,6 @@ The app can run without AU/US yield or iron ore data. If you have CSVs, upload t
 - `date`
 - value column such as `close`, `yield`, `price`, or `value`
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for planned versions. The next branch of work is V2: a machine-learning research layer that compares an XGBoost-style classifier against the current rule-based signal engine without adding live trading.
