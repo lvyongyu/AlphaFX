@@ -35,13 +35,21 @@ Run tests:
 pytest
 ```
 
-## Optional Data
+## Macro Data
 
-The app can run without AU/US yield or iron ore data. If you have CSVs, upload them in the Streamlit sidebar. Expected columns:
+V1 can run without AU/US yield or iron ore data. If you have CSVs, upload them in the Streamlit sidebar. Expected columns:
 
 - `date`
 - value column such as `close`, `yield`, `price`, or `value`
 
+V2 should make this easier for users by downloading macro data automatically:
+
+- US2Y from FRED `DGS2`
+- AU2Y from the RBA F2 capital market yields table
+- Iron ore from FRED `PIORECRUSDM`
+
+CSV upload should remain as a manual override, not the default path.
+
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for planned versions. The next branch of work is V2: a machine-learning research layer that compares an XGBoost-style classifier against the current rule-based signal engine without adding live trading.
+See [ROADMAP.md](ROADMAP.md) for planned versions. The next branch of work is V2: first automate macro data collection, then add a machine-learning research layer that compares against the current rule-based signal engine without adding live trading.

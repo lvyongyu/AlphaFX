@@ -21,9 +21,67 @@ V1 includes:
 - AI-style explanation, contrarian, and judge agents
 - Unit tests for core quant logic
 
-## Next Version: V2 Machine Learning
+## Next Version: V2 Research Upgrade
 
-Goal: add a transparent ML research layer that predicts whether the future 20-trading-day AUD/USD return is positive, then compares that model against the existing rule-based strategy.
+Goal: make the app useful for a normal user who does not know where to find macro CSV files, then add a transparent ML research layer that predicts whether the future 20-trading-day AUD/USD return is positive.
+
+V2 is split into two phases:
+
+- V2.0: Macro auto-data foundation.
+- V2.1: Machine-learning comparison layer.
+
+## V2.0 Macro Auto-Data Foundation
+
+Problem: V1 supports AU2Y, US2Y, and iron ore as CSV uploads, but most users will not know where to download these files or how to format them. If those factors stay missing, the factor view, rule signal, and future ML model are weaker.
+
+Goal: make macro factor collection one-click by default, while keeping CSV upload as a manual override.
+
+Data sources:
+
+- US2Y: FRED `DGS2`, 2-year Treasury constant maturity rate.
+- AU2Y: RBA Statistical Table F2, Australian Government 2-year bond yield.
+- Iron ore: FRED `PIORECRUSDM`, global iron ore price in USD per metric ton.
+
+V2.0 should update:
+
+- Dependencies:
+  - Add `pandas_datareader` only if it makes FRED access materially cleaner.
+  - Otherwise use direct CSV/HTTP readers from pandas to keep deployment simple.
+- Database:
+  - Add a `macro_data` table with `date`, `symbol`, `value`, `source`, `frequency`, and `created_at`.
+  - Store canonical symbols such as `US2Y`, `AU2Y`, and `IRON_ORE`.
+  - Keep `market_data` for traded/market symbols from yfinance.
+- Data layer:
+  - Add macro download methods to `DataAgent`, or split into a dedicated `MacroDataAgent` if the class becomes too broad.
+  - Download and normalize FRED/RBA series into the same schema.
+  - Preserve source and frequency metadata.
+  - Handle missing network/source failures gracefully with clear status messages.
+- Feature layer:
+  - Build `yield_spread = AU2Y - US2Y` automatically.
+  - Forward-fill lower-frequency iron ore data onto the market date index.
+  - Mark stale values if a macro series has not updated within an expected window.
+  - Show whether each factor came from FRED, RBA, yfinance, CSV override, or is unavailable.
+- UI:
+  - Replace `Download / Refresh` with a clearer action such as `Download market + macro data`.
+  - Keep CSV upload under a `Manual data override` expander.
+  - Add a data status panel that shows latest date, source, rows, and freshness for each input.
+- Tests:
+  - FRED CSV parser.
+  - RBA F2 parser.
+  - Macro data upsert/load.
+  - Yield spread construction.
+  - Monthly iron ore forward-fill.
+  - Stale/missing data status.
+
+V2.0 acceptance criteria:
+
+- A user can deploy the app, press one refresh button, and get AUD/USD, DXY, VIX, US2Y, AU2Y, and iron ore factors without manually downloading CSVs.
+- The app still runs if any macro source is unavailable.
+- Factor View clearly distinguishes available, stale, manually overridden, and missing data.
+
+## V2.1 Machine Learning
+
+Goal: add a transparent ML research layer that compares a model against the existing rule-based strategy.
 
 V2 should update:
 
@@ -33,7 +91,8 @@ V2 should update:
 - Data and features:
   - Add future return targets: `audusd_future_return_20d` and `target_up_20d`.
   - Create a clean ML dataset builder that drops rows with unavailable target or required features.
-  - Preserve optional factor behavior: yield and iron ore can be absent, but the model must report which features were actually used.
+  - Use automatically downloaded macro factors from V2.0 when available.
+  - Preserve optional factor behavior: any unavailable factor must be excluded explicitly, and the model must report which features were actually used.
 - Model layer:
   - Add an `MLSignalAgent`.
   - Use time-series split or walk-forward validation, not random train/test split.
@@ -55,7 +114,14 @@ V2 should update:
   - Walk-forward split does not leak future data.
   - ML backtest mode uses only prior data.
 
-V2 should not add:
+V2.1 acceptance criteria:
+
+- The app shows rule-based and ML signals side by side.
+- The app compares rule-based and ML backtests over the same dates, costs, and leverage.
+- The model reports validation metrics, feature importance, and sample-size warnings.
+- The AI report explains where the ML model agrees or disagrees with the rule model.
+
+All V2 work should not add:
 
 - Live trading.
 - IBKR.
