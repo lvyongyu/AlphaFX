@@ -308,6 +308,11 @@ Acceptance criteria:
 
 ## V2.5 P2 Machine Learning
 
+Status: shipped as a research comparison. The ML signal is leak-free
+(walk-forward, point-in-time features) and surfaced alongside the rule signal,
+but the rule signal stays primary/live and the ML tab carries a prominent
+small-sample overfitting warning (~N/horizon independent observations).
+
 Goal: add a transparent ML research layer that compares a model against the existing rule-based strategy.
 
 V2.5 should update:

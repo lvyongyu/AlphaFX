@@ -23,6 +23,7 @@ from alphafx.agents import (
 from alphafx.config import DEFAULT_SYMBOLS, llm_enabled
 from alphafx.database import Database
 from alphafx.llm import LLMContrarianAgent, LLMExplanationAgent, LLMJudgeAgent
+from alphafx.ml import MLSignalAgent, ml_rule_agreement
 
 
 st.set_page_config(page_title="AlphaFX AUD/USD Research Platform", page_icon="FX", layout="wide")
@@ -140,10 +141,28 @@ else:
 aud_latest = market_data[market_data["symbol"] == DEFAULT_SYMBOLS.audusd].sort_values("date").iloc[-1]["close"]
 paper_journal_agent.record_signal(latest_feature, latest_signal, factor_table, risk, judgement["explanation"], audusd_price=float(aud_latest))
 
+# ML research comparison — computed once, reused by the AI Report and ML tabs.
+# Walk-forward + point-in-time features; the rule signal stays primary/live.
+ml_agent = MLSignalAgent()
+try:
+    ml_result = ml_agent.walk_forward_predict(features)
+except Exception as exc:  # noqa: BLE001 - keep the app running if ML is unavailable
+    ml_result = {
+        "predictions": pd.DataFrame(),
+        "fold_metrics": pd.DataFrame(),
+        "feature_importance": pd.DataFrame(),
+        "training_samples": 0,
+        "effective_n": 0,
+        "manifest": [],
+        "warning": f"ML unavailable: {exc}",
+    }
+ml_signals = ml_agent.to_signals(ml_result.get("predictions", pd.DataFrame()))
+ml_latest_signal = ml_signals.iloc[-1]["signal"] if not ml_signals.empty else None
+
 st.title("AlphaFX")
 st.caption("Explainable macro-factor research platform for AUD/USD directional signals. Not financial advice. Not a profit guarantee.")
 
-tabs = st.tabs(["Dashboard", "Factor View", "Backtest", "Signal Diagnostics", "Validation", "Paper Journal", "AI Report"])
+tabs = st.tabs(["Dashboard", "Factor View", "Backtest", "Signal Diagnostics", "Validation", "Paper Journal", "AI Report", "ML"])
 
 with tabs[0]:
     st.subheader("Latest AUD/USD Signal")
@@ -366,6 +385,9 @@ Suggested action: **{risk.action}**. Leverage: **{risk.leverage:.1f}x**. Stop lo
 
 ### 6. What To Watch
 {contrarian["watch"]}
+
+### 7. Rule vs ML
+{ml_rule_agreement(latest_signal["signal"], ml_latest_signal)}
 """
     )
 
@@ -382,3 +404,58 @@ Suggested action: **{risk.action}**. Leverage: **{risk.leverage:.1f}x**. Stop lo
                     use_container_width=True,
                     hide_index=True,
                 )
+
+with tabs[7]:
+    st.subheader("ML (experimental)")
+    st.caption(
+        "A simple, leak-free ML model for comparison against the rule strategy — NOT a replacement. "
+        "The rule signal stays primary/live. Trained with walk-forward validation on point-in-time features."
+    )
+    if ml_result.get("warning"):
+        st.warning(ml_result["warning"])
+
+    cols = st.columns(3)
+    cols[0].metric("Rule signal (live)", str(latest_signal["signal"]).upper())
+    cols[1].metric("ML signal (experimental)", str(ml_latest_signal).upper() if ml_latest_signal else "N/A")
+    cols[2].metric("Independent obs (~N/horizon)", ml_result.get("effective_n", 0))
+    st.write(ml_rule_agreement(latest_signal["signal"], ml_latest_signal))
+    st.caption(f"Training rows: {ml_result.get('training_samples', 0)} · features used: {', '.join(ml_result.get('manifest', [])) or 'none'}")
+
+    fold_metrics = ml_result.get("fold_metrics", pd.DataFrame())
+    if not fold_metrics.empty:
+        st.subheader("Walk-forward validation (per fold)")
+        st.dataframe(fold_metrics, use_container_width=True, hide_index=True)
+
+    importance = ml_result.get("feature_importance", pd.DataFrame())
+    if not importance.empty:
+        st.subheader("Feature importance")
+        st.bar_chart(importance.set_index("feature")["importance"])
+
+    if not ml_signals.empty:
+        st.subheader("Rule vs ML backtest (same dates, costs, leverage)")
+        rule_bt, rule_m = backtest_agent.run(market_data, signals, start, end, leverage=leverage)
+        ml_bt, ml_m = backtest_agent.run(market_data, ml_signals, start, end, leverage=leverage)
+        keys = ["total_return", "sharpe", "max_drawdown", "win_rate", "number_of_trades", "strategy_vs_random_percentile"]
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {"strategy": "rule (live)", **{k: rule_m.get(k) for k in keys}},
+                    {"strategy": "ML (experimental)", **{k: ml_m.get(k) for k in keys}},
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        if not rule_bt.empty and not ml_bt.empty:
+            overlay = (
+                rule_bt[["date", "equity"]].rename(columns={"equity": "rule"})
+                .merge(ml_bt[["date", "equity"]].rename(columns={"equity": "ml"}), on="date", how="outer")
+                .sort_values("date")
+            )
+            st.line_chart(overlay.set_index("date"))
+        st.caption(
+            "ML predictions are out-of-sample only (walk-forward), so this is an honest comparison — "
+            "but on this sample size the ML edge is easily noise. Do not treat ML as the better signal by default."
+        )
+    else:
+        st.info("No ML predictions yet — need more clean history to train.")

@@ -69,6 +69,20 @@ summarizes, and the judge's `final_signal` is forced to equal the quant signal.
 - Every LLM call is logged to the `llm_calls` table for auditability, and the
   LLM is never called inside the backtest or walk-forward loops.
 
+## ML Research Layer
+
+A simple, leak-free ML model (`alphafx/ml/`) runs **alongside** the rule signal
+for comparison — it is **not** a replacement. The rule signal stays primary/live.
+
+- Targets are forward returns; features are the point-in-time engineered factors.
+- Validation is walk-forward / time-series split only (no random split, no leak),
+  and the ML backtest uses out-of-sample predictions only.
+- Primary model is a regularized logistic regression; XGBoost is used if installed
+  (optional), otherwise the app falls back to scikit-learn and still runs.
+- Because the independent sample is small (~rows / horizon), ML overfits easily;
+  the ML tab shows feature importance, per-fold validation metrics, a rule-vs-ML
+  backtest, and a prominent small-sample warning.
+
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for planned versions and [DESIGN.md](DESIGN.md) for the planned professional research-platform architecture.

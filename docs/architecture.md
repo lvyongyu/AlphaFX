@@ -25,6 +25,14 @@ flowchart TD
     %% Numeric-only branch — never calls the LLM
     SIG --> BT[BacktestAgent / WalkForward<br/>fully numeric · no LLM]
 
+    %% ML research comparison — rule signal stays primary
+    FE --> DS[build_dataset<br/>forward-return target · point-in-time features]
+    DS --> ML2[MLSignalAgent<br/>walk-forward · no leak · small-sample warning]
+    ML2 --> MLBT[ML backtest<br/>OOS only · same costs]
+    BT --> CMP[rule vs ML comparison]
+    MLBT --> CMP
+    CMP --> UI
+
     %% LLM explanation layer
     SIG --> EV[build_evidence_pack<br/>numbers only · no raw prices / no future data]
     RISK --> EV
