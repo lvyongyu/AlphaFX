@@ -11,9 +11,10 @@ from alphafx.dashboard import cache, context as ctxmod  # noqa: E402
 from alphafx.dashboard.tabs import (  # noqa: E402
     ai_report,
     backtest,
-    dashboard,
+    chart,
     diagnostics,
     factor,
+    hero,
     journal,
     ml,
     validation,
@@ -51,10 +52,23 @@ if ctx.status == ctxmod.NO_SIGNAL:
     st.stop()
 
 st.title("AlphaFX")
-st.caption("Explainable macro-factor research platform for AUD/USD directional signals. Not financial advice. Not a profit guarantee.")
+st.caption("Explainable macro-factor research for AUD/USD. Not financial advice. Not a profit guarantee.")
 
-tab_objs = st.tabs(["Dashboard", "Factor View", "Backtest", "Signal Diagnostics", "Validation", "Paper Journal", "AI Report", "ML"])
-renderers = [dashboard, factor, backtest, diagnostics, validation, journal, ai_report, ml]
-for tab, renderer in zip(tab_objs, renderers):
-    with tab:
-        renderer.render(ctx)
+# The answer first — today's call, the factors behind it, plain English.
+hero.render(ctx)
+
+# Everything else is opt-in detail, collapsed by default.
+with st.expander("📈  Price chart & data"):
+    chart.render(ctx)
+with st.expander("🧮  Factor detail"):
+    factor.render(ctx)
+with st.expander("📊  Backtest performance"):
+    backtest.render(ctx)
+with st.expander("🔬  Validation & ML"):
+    diagnostics.render(ctx)
+    validation.render(ctx)
+    ml.render(ctx)
+with st.expander("📄  Full AI report"):
+    ai_report.render(ctx)
+with st.expander("📓  Paper journal"):
+    journal.render(ctx)

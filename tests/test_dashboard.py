@@ -4,9 +4,10 @@ from alphafx.dashboard import context as ctxmod
 from alphafx.dashboard.tabs import (
     ai_report,
     backtest,
-    dashboard,
+    chart,
     diagnostics,
     factor,
+    hero,
     journal,
     ml,
     validation,
@@ -46,5 +47,5 @@ def test_all_tabs_render_without_error(tmp_path):
     db = _seeded_db(tmp_path)
     ctx = ctxmod.build_context("2024-01-01", "2024-12-31", 2.0, use_llm=False, db=db)
     assert ctx.status == ctxmod.OK
-    for renderer in (dashboard, factor, backtest, diagnostics, validation, journal, ai_report, ml):
+    for renderer in (hero, chart, factor, backtest, diagnostics, validation, journal, ai_report, ml):
         renderer.render(ctx)
