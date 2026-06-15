@@ -240,7 +240,23 @@ class QuantSignalAgent:
     def __init__(self, db: Database | None = None) -> None:
         self.db = db or Database()
 
-    def generate_signals(self, features: pd.DataFrame, calibration: pd.DataFrame | dict[str, float] | None = None) -> pd.DataFrame:
+    score_columns = ["aud_momentum_score", "dxy_score", "yield_score", "ironore_score", "vix_score"]
+
+    def generate_signals(
+        self,
+        features: pd.DataFrame,
+        calibration: pd.DataFrame | dict[str, float] | None = None,
+        weights: dict[str, float] | None = None,
+        persist: bool = True,
+    ) -> pd.DataFrame:
+        # `weights` is an OPTIONAL, experimental factor weighting. Default (None)
+        # keeps the equal-weight rule signal unchanged — equal weight is robust and
+        # hard to beat, and orthogonalization tends to hurt IC/returns, so the
+        # default is deliberately left alone (see project memory). When provided,
+        # weights are normalized to sum to len(factors) so the -5..+5 scale and the
+        # +/-3 thresholds still hold; this path is for walk-forward-validated
+        # comparison only, never silently the default.
+        #
         # `calibration` accepts two shapes with very different look-ahead profiles:
         #   - DataFrame  -> expanding-window, per-date calibrated probability
         #                   (SignalDiagnosticsAgent.calibration_frame). Safe for
@@ -258,8 +274,15 @@ class QuantSignalAgent:
         out["yield_score"] = features["yield_spread_change_20d"].apply(_score_positive)
         out["ironore_score"] = features["ironore_return_20d"].apply(_score_positive)
         out["vix_score"] = features["vix_change_20d"].apply(_score_negative)
-        score_cols = ["aud_momentum_score", "dxy_score", "yield_score", "ironore_score", "vix_score"]
-        out["score"] = out[score_cols].sum(axis=1, min_count=1)
+        score_cols = self.score_columns
+        if weights:
+            w = pd.Series(weights, dtype=float).reindex(score_cols).fillna(0.0)
+            total = float(w.sum())
+            if total > 0:
+                w = w * (len(score_cols) / total)  # keep the -5..+5 scale
+            out["score"] = out[score_cols].mul(w, axis=1).sum(axis=1, min_count=1)
+        else:
+            out["score"] = out[score_cols].sum(axis=1, min_count=1)
         out["signal"] = out["score"].apply(self.map_signal)
         out["fallback_probability"] = out["score"].apply(self.map_probability)
         out["probability"] = out["fallback_probability"]
@@ -282,7 +305,8 @@ class QuantSignalAgent:
             out.loc[calibrated, "probability_source"] = "historical_calibration"
             out = out.drop(columns=["calibrated_probability"])
         out["confidence"] = out.apply(lambda row: self.map_confidence(row["score"], row[score_cols].notna().sum()), axis=1)
-        self.db.save_signals(out)
+        if persist:
+            self.db.save_signals(out)
         return out
 
     def latest_signal(self, signals: pd.DataFrame) -> pd.Series:
@@ -799,6 +823,18 @@ class FactorDiagnosticsAgent:
         "ironore_return_20d",
     ]
 
+    # The raw feature behind each ±1 scoring component, with a display label.
+    # DXY and VIX both proxy the USD/risk axis and are typically correlated —
+    # the correlation matrix makes that visible (the double-count is monitored,
+    # not "fixed" by orthogonalization, which tends to hurt IC/returns).
+    scoring_features = {
+        "aud_momentum_score": ("audusd_return_20d", "AUD momentum"),
+        "dxy_score": ("dxy_return_20d", "DXY trend"),
+        "yield_score": ("yield_spread_change_20d", "Yield spread"),
+        "ironore_score": ("ironore_return_20d", "Iron ore"),
+        "vix_score": ("vix_change_20d", "VIX"),
+    }
+
     def analyze(self, features: pd.DataFrame, horizon: int = 20) -> pd.DataFrame:
         if features.empty:
             return pd.DataFrame()
@@ -827,12 +863,66 @@ class FactorDiagnosticsAgent:
                     "coefficient_proxy": corr,
                     "ic_t_stat": ic_t,
                     "ic_t_stat_adjusted": ic_t_adjusted,
+                    "information_ratio": self._information_ratio(pair[column], pair["future_return"]),
                     "hit_contribution": float((sign == target).mean()),
                     "stability": self._rolling_stability(pair[column], pair["future_return"]),
                     "feature_importance": abs(corr),
                 }
             )
         return pd.DataFrame(rows).sort_values("feature_importance", ascending=False) if rows else pd.DataFrame()
+
+    def factor_correlation(self, features: pd.DataFrame) -> pd.DataFrame:
+        """Correlation matrix among the five scoring features.
+
+        Surfaces the DXY/VIX overlap (USD/risk axis) so the double-count is
+        visible and monitored. We deliberately do NOT orthogonalize it away —
+        empirically that tends to reduce IC and returns and is unstable.
+        """
+        if features.empty:
+            return pd.DataFrame()
+        cols = {raw: label for raw, label in (v for v in self.scoring_features.values()) if raw in features.columns}
+        present = [raw for raw in cols]
+        if len(present) < 2:
+            return pd.DataFrame()
+        corr = features[present].corr()
+        corr = corr.rename(index=cols, columns=cols)
+        return corr
+
+    def ic_weights(self, features: pd.DataFrame, horizon: int = 20) -> dict[str, float]:
+        """Experimental |IC|-based weights keyed by score column.
+
+        In-sample by construction — only use inside walk-forward, and treat with
+        caution: the +12.4% IC-weighting result in the literature comes from large
+        equity cross-sections, while this model has only ~N/horizon independent
+        observations, so IC weighting can overfit. Returns {} when unavailable
+        (caller then falls back to equal weight).
+        """
+        diag = self.analyze(features, horizon=horizon)
+        if diag.empty:
+            return {}
+        ic_by_feature = dict(zip(diag["factor"], diag["information_coefficient"].abs()))
+        weights = {
+            score_col: float(ic_by_feature.get(raw, 0.0))
+            for score_col, (raw, _label) in self.scoring_features.items()
+            if raw in ic_by_feature
+        }
+        return weights if any(v > 0 for v in weights.values()) else {}
+
+    @staticmethod
+    def _rolling_ics(factor: pd.Series, target: pd.Series, window: int = 126) -> list[float]:
+        ics: list[float] = []
+        for start in range(0, len(factor) - window + 1, window):
+            corr = factor.iloc[start : start + window].corr(target.iloc[start : start + window])
+            if pd.notna(corr):
+                ics.append(float(corr))
+        return ics
+
+    def _information_ratio(self, factor: pd.Series, target: pd.Series, window: int = 126) -> float:
+        ics = self._rolling_ics(factor, target, window)
+        if len(ics) < 2:
+            return 0.0
+        std = float(np.std(ics, ddof=1))
+        return float(np.mean(ics) / std) if std > 0 else 0.0
 
     @staticmethod
     def _ic_t_stat(ic: float, n: int) -> float:

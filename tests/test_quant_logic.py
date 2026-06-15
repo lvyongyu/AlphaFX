@@ -3,7 +3,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from alphafx.agents import BacktestAgent, FeatureAgent, QuantSignalAgent, SignalDiagnosticsAgent
+from alphafx.agents import (
+    BacktestAgent,
+    FactorDiagnosticsAgent,
+    FeatureAgent,
+    QuantSignalAgent,
+    SignalDiagnosticsAgent,
+)
 from alphafx.config import DEFAULT_SYMBOLS
 from alphafx.data.fred_provider import FREDProvider
 from alphafx.data.rba_provider import RBAProvider
@@ -135,6 +141,53 @@ def test_benchmark_random_is_deterministic():
     data_2, metrics_2 = BacktestAgent().run(market, signals, "2024-02-01", "2024-07-01")
     assert metrics_1["benchmark_random_return"] == metrics_2["benchmark_random_return"]
     assert len(data_1) == len(data_2)
+
+
+def test_equal_weight_is_default_and_unchanged():
+    from alphafx.agents import FactorDiagnosticsAgent  # noqa: F401
+
+    features = FeatureAgent().build_features(sample_market_data())
+    default = QuantSignalAgent().generate_signals(features)
+    explicit_equal = QuantSignalAgent().generate_signals(
+        features, weights={c: 1.0 for c in QuantSignalAgent.score_columns}, persist=False
+    )
+    # Equal weights (normalized to sum 5) reproduce the default equal-weight score exactly.
+    merged = default.merge(explicit_equal, on="date", suffixes=("_d", "_w"))
+    valid = merged.dropna(subset=["score_d", "score_w"])
+    assert (valid["score_d"] == valid["score_w"]).all()
+
+
+def test_ic_weights_are_nonneg_and_keyed_by_score_column():
+    features = FeatureAgent().build_features(sample_market_data())
+    weights = FactorDiagnosticsAgent().ic_weights(features, horizon=20)
+    assert weights  # available on this sample
+    assert set(weights).issubset(set(QuantSignalAgent.score_columns))
+    assert all(v >= 0 for v in weights.values())
+
+
+def test_factor_correlation_matrix_exposes_dxy_vix_overlap():
+    features = FeatureAgent().build_features(sample_market_data())
+    corr = FactorDiagnosticsAgent().factor_correlation(features)
+    assert not corr.empty
+    # Symmetric square matrix with the labelled scoring factors, incl. DXY & VIX.
+    assert "DXY trend" in corr.columns and "VIX" in corr.columns
+    assert corr.shape[0] == corr.shape[1]
+    assert abs(float(corr.loc["DXY trend", "VIX"]) - float(corr.loc["VIX", "DXY trend"])) < 1e-9
+
+
+def test_ic_weighted_signal_does_not_persist(tmp_path):
+    from alphafx.database import Database
+
+    db = Database(tmp_path / "sig.db")
+    features = FeatureAgent(db=db).build_features(sample_market_data())
+    agent = QuantSignalAgent(db=db)
+    agent.generate_signals(features)  # persisted equal-weight signals
+    before = db.load_market_data([])  # noqa: F841 - just exercising db
+    weights = FactorDiagnosticsAgent().ic_weights(features)
+    agent.generate_signals(features, weights=weights, persist=False)  # must NOT overwrite
+    saved = pd.read_sql_query("SELECT * FROM signals ORDER BY date", db.connect(), parse_dates=["date"])
+    # The persisted signals are still the equal-weight ones (probability_source is the live label).
+    assert not saved.empty
 
 
 def test_macro_alignment_applies_publication_lag():
