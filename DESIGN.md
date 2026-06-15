@@ -145,6 +145,44 @@ Only after calibration, backtest, and walk-forward validation are stable:
 - No deep learning.
 - No reinforcement learning.
 
+## LLM Explanation Layer
+
+Today the explanation, contrarian, and judge agents are template-based string
+builders, not real LLM calls. The LLM layer upgrades them to genuine Claude
+calls while preserving the core rule: the LLM explains, challenges, and
+summarizes the signal, but never creates it.
+
+Non-negotiable boundary:
+
+- Quant agents produce `signal`, `score`, and `probability`. The LLM may not
+  change any of them.
+- The LLM consumes only pre-computed numbers (an evidence pack), never raw
+  market data, and never asserts a direction different from the quant signal.
+- The judge may record an LLM dissent in a separate field, but `final_signal`
+  must equal the quant signal.
+
+Design principles for this layer:
+
+- Strict separation: the LLM is an explanation/critique layer, not a signal
+  source.
+- Grounding: pass exact numbers only; instruct the model to use the evidence and
+  not invent data; validate the response against the signal direction before
+  returning it.
+- Never in the backtest loop: the LLM runs only on the latest signal and on
+  on-demand reports. Backtesting and walk-forward stay fully numeric.
+- Graceful degradation: if no API key is configured or a call fails, fall back to
+  the existing template agents so the app still runs offline.
+- Auditability: persist prompt, model, response, and token usage so any LLM
+  explanation can be reproduced and reviewed later.
+
+Implementation notes:
+
+- Use the official `anthropic` Python SDK. Default model `claude-opus-4-8`; the
+  lighter per-day explanation calls may use a cheaper tier by configuration.
+- Use structured outputs for the judge so downstream code consumes a stable
+  shape. Cache the fixed system prompt; put the volatile evidence pack last.
+- Keep the model id in `config.py`, not hardcoded.
+
 ## Target Architecture
 
 The desired end-state structure is:
@@ -180,6 +218,12 @@ alphafx/
     signal_agent.py
     risk_agent.py
     explanation_agent.py
+  llm/
+    client.py
+    evidence.py
+    prompts.py
+    schemas.py
+    narrator.py
   dashboard/
     app.py
   storage/

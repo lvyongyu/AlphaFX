@@ -4,5 +4,6 @@ pandas>=2.2
 numpy>=1.26
 plotly>=5.22
 scikit-learn>=1.5
+anthropic>=0.40
 pytest>=8.2
 

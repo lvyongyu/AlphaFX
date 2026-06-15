@@ -31,6 +31,8 @@ Known V1 limitations:
 - Macro factors are incomplete unless data is manually supplied.
 - No walk-forward validation yet.
 - No factor weight stability or information coefficient diagnostics yet.
+- The explanation, contrarian, and judge agents are template-based string
+  builders, not real LLM calls.
 
 ## Next Version: V2 Professional Research Upgrade
 
@@ -248,7 +250,7 @@ Data sources:
 - AU2Y: RBA Statistical Table F2, Australian Government 2-year bond yield.
 - Iron ore: FRED `PIORECRUSDM`, global iron ore price in USD per metric ton.
 
-V2.0 should update:
+V2.3 should update:
 
 - Dependencies:
   - Add `pandas_datareader` only if it makes FRED access materially cleaner.
@@ -279,7 +281,7 @@ V2.0 should update:
   - Monthly iron ore forward-fill.
   - Stale/missing data status.
 
-V2.0 acceptance criteria:
+V2.3 acceptance criteria:
 
 - A user can deploy the app, press one refresh button, and get AUD/USD, DXY, VIX, US2Y, AU2Y, and iron ore factors without manually downloading CSVs.
 - The app still runs if any macro source is unavailable.
@@ -308,7 +310,7 @@ Acceptance criteria:
 
 Goal: add a transparent ML research layer that compares a model against the existing rule-based strategy.
 
-V2 should update:
+V2.5 should update:
 
 - Dependencies:
   - Add `xgboost` if install size and Streamlit Cloud compatibility are acceptable.
@@ -339,12 +341,46 @@ V2 should update:
   - Walk-forward split does not leak future data.
   - ML backtest mode uses only prior data.
 
-V2.1 acceptance criteria:
+V2.5 acceptance criteria:
 
 - The app shows rule-based and ML signals side by side.
 - The app compares rule-based and ML backtests over the same dates, costs, and leverage.
 - The model reports validation metrics, feature importance, and sample-size warnings.
-- The AI report explains where the ML model agrees or disagrees with the rule model.
+- The AI report explains where the ML model agrees or disagrees with the rule model (template-level until V2.6 lands the LLM layer).
+
+## V2.6 P2 LLM Explanation Layer
+
+Goal: upgrade the explanation, contrarian, and judge agents from template-based
+string builders into real Claude calls, without letting the LLM create signals.
+
+Boundary (non-negotiable):
+
+- Quant agents own `signal`, `score`, and `probability`. The LLM cannot change them.
+- The LLM consumes only pre-computed numbers (an evidence pack), never raw market
+  data, and never states a direction different from the quant signal.
+- The judge may record an LLM dissent separately, but `final_signal` must equal the
+  quant signal.
+
+Plan:
+
+- Add a thin `alphafx/llm/` layer: API client wrapper, evidence-pack builder,
+  prompts, structured-output schemas, and LLM-backed narrator agents.
+- Keep the existing template agents as the offline fallback when no API key is set
+  or a call fails.
+- Never call the LLM inside the backtest or walk-forward loops; only on the latest
+  signal and on on-demand reports.
+- Use the official `anthropic` SDK with the model id configured in `config.py`
+  (default `claude-opus-4-8`).
+- Persist prompt, model, response, and token usage for auditability and
+  reproducibility.
+
+Acceptance criteria:
+
+- LLM explanations are grounded in the evidence pack and validated against the
+  quant signal direction before display.
+- The app runs and explains signals even with no API key (template fallback).
+- The judge's structured output never overrides the quant signal.
+- Every LLM call is logged with enough detail to reproduce it.
 
 All V2 work should not add:
 
