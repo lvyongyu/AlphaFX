@@ -9,7 +9,6 @@ from alphafx.dashboard.context import ResearchContext
 
 
 def render(ctx: ResearchContext) -> None:
-    leverage = ctx.leverage
     use_llm = ctx.use_llm
     latest_signal = ctx.latest_signal
     factor_table = ctx.factor_table

@@ -13,7 +13,6 @@ def render(ctx: ResearchContext) -> None:
     market_data = ctx.market_data
     features = ctx.features
     latest_signal = ctx.latest_signal
-    risk = ctx.risk
     st.subheader("Walk-Forward Validation")
     wf = walk_forward_agent.run(market_data, features)
     if wf.empty:

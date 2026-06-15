@@ -40,8 +40,6 @@ def test_calibrated_probability_uses_prior_outcomes():
 
 
 def test_equal_weight_is_default_and_unchanged():
-    from alphafx.agents import FactorDiagnosticsAgent  # noqa: F401
-
     features = FeatureAgent().build_features(sample_market_data())
     default = QuantSignalAgent().generate_signals(features)
     explicit_equal = QuantSignalAgent().generate_signals(
@@ -54,13 +52,10 @@ def test_equal_weight_is_default_and_unchanged():
 
 
 def test_ic_weighted_signal_does_not_persist(tmp_path):
-    from alphafx.database import Database
-
     db = Database(tmp_path / "sig.db")
     features = FeatureAgent(db=db).build_features(sample_market_data())
     agent = QuantSignalAgent(db=db)
     agent.generate_signals(features)  # persisted equal-weight signals
-    before = db.load_market_data([])  # noqa: F841 - just exercising db
     weights = FactorDiagnosticsAgent().ic_weights(features)
     agent.generate_signals(features, weights=weights, persist=False)  # must NOT overwrite
     saved = pd.read_sql_query("SELECT * FROM signals ORDER BY date", db.connect(), parse_dates=["date"])

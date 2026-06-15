@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pandas as pd
-
 from alphafx.dashboard import context as ctxmod
 from alphafx.dashboard.tabs import (
     ai_report,

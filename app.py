@@ -7,7 +7,7 @@ import streamlit as st
 st.set_page_config(page_title="AlphaFX AUD/USD Research Platform", page_icon="FX", layout="wide")
 
 from alphafx.config import llm_enabled  # noqa: E402 - must follow set_page_config
-from alphafx.dashboard import context as ctxmod  # noqa: E402
+from alphafx.dashboard import cache, context as ctxmod  # noqa: E402
 from alphafx.dashboard.tabs import (  # noqa: E402
     ai_report,
     backtest,
@@ -36,11 +36,12 @@ with st.sidebar:
         st.caption("Set ANTHROPIC_API_KEY to enable the LLM. Falling back to templates for now.")
     refresh = st.button("Download market + macro data", type="primary", use_container_width=True)
 
+build_kwargs = dict(compute_features=cache.cached_features, compute_ml=cache.cached_ml_result)
 if refresh:
     with st.spinner("Downloading market and macro data..."):
-        ctx = ctxmod.build_context(start, end, leverage, use_llm, refresh=True)
+        ctx = ctxmod.build_context(start, end, leverage, use_llm, refresh=True, **build_kwargs)
 else:
-    ctx = ctxmod.build_context(start, end, leverage, use_llm, refresh=False)
+    ctx = ctxmod.build_context(start, end, leverage, use_llm, refresh=False, **build_kwargs)
 
 if ctx.status == ctxmod.NO_DATA:
     st.info("Use the sidebar to download AUD/USD, DXY, VIX, and macro data.")

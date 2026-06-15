@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from alphafx.agents import BacktestAgent, FeatureAgent, QuantSignalAgent
+from alphafx.agents import BacktestAgent, FeatureAgent
 from alphafx.config import DEFAULT_SYMBOLS
 from alphafx.ml import MLSignalAgent, build_dataset, build_targets, ml_rule_agreement
 

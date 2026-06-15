@@ -29,11 +29,12 @@ class WalkForwardAgent:
             test = features.iloc[start_idx : min(start_idx + test_days, len(features))].copy()
             if test.empty:
                 break
-            train_signals = signal_agent.generate_signals(train)
+            # Internal validation signals must not overwrite the live signals table.
+            train_signals = signal_agent.generate_signals(train, persist=False)
             calibration = diagnostics.make_walkforward_calibration(market_data, train_signals, horizon=holding_period, min_samples=10)
-            test_signals = signal_agent.generate_signals(test, calibration=calibration)
-            bt, metrics = backtester.run(market_data, test_signals, test["date"].min(), test["date"].max(), holding_period=holding_period)
-            in_bt, in_metrics = backtester.run(market_data, train_signals, train["date"].min(), train["date"].max(), holding_period=holding_period)
+            test_signals = signal_agent.generate_signals(test, calibration=calibration, persist=False)
+            _, metrics = backtester.run(market_data, test_signals, test["date"].min(), test["date"].max(), holding_period=holding_period)
+            _, in_metrics = backtester.run(market_data, train_signals, train["date"].min(), train["date"].max(), holding_period=holding_period)
             rows.append(
                 {
                     "train_start": train["date"].min(),

@@ -104,6 +104,8 @@ def build_context(
     use_llm: bool,
     refresh: bool = False,
     db: Database | None = None,
+    compute_features: Any = None,
+    compute_ml: Any = None,
 ) -> ResearchContext:
     """Load data and compute the full research context. Streamlit-free.
 
@@ -145,7 +147,10 @@ def build_context(
         return ResearchContext(status=NO_DATA, start=start, end=end, leverage=leverage, use_llm=use_llm, **agents)
 
     macro_data = data_agent.load_macro_data()
-    features = feature_agent.build_features(market_data, macro_data=macro_data)
+    if compute_features is not None:
+        features = compute_features(market_data, macro_data)
+    else:
+        features = feature_agent.build_features(market_data, macro_data=macro_data)
     raw_signals = signal_agent.generate_signals(features)
     calibration = diagnostics_agent.calibration_frame(market_data, raw_signals, horizon=20, min_samples=20)
     signals = signal_agent.generate_signals(features, calibration=calibration)
@@ -193,10 +198,13 @@ def build_context(
     )
 
     # ML research comparison — computed once, reused by the AI Report and ML tabs.
-    try:
-        ml_result = ml_agent.walk_forward_predict(features)
-    except Exception as exc:  # noqa: BLE001 - keep the app running if ML is unavailable
-        ml_result = _empty_ml_result(f"ML unavailable: {exc}")
+    if compute_ml is not None:
+        ml_result = compute_ml(features)
+    else:
+        try:
+            ml_result = ml_agent.walk_forward_predict(features)
+        except Exception as exc:  # noqa: BLE001 - keep the app running if ML is unavailable
+            ml_result = _empty_ml_result(f"ML unavailable: {exc}")
     ml_signals = ml_agent.to_signals(ml_result.get("predictions", pd.DataFrame()))
     ml_latest_signal = ml_signals.iloc[-1]["signal"] if not ml_signals.empty else None
 

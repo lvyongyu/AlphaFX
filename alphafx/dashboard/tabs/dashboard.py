@@ -14,10 +14,8 @@ def render(ctx: ResearchContext) -> None:
     data_agent = ctx.data_agent
     market_data = ctx.market_data
     macro_data = ctx.macro_data
-    features = ctx.features
     latest_signal = ctx.latest_signal
     risk = ctx.risk
-    explanation = ctx.explanation
     judgement = ctx.judgement
     st.subheader("Latest AUD/USD Signal")
     metric_cards(latest_signal, risk)

@@ -4,8 +4,6 @@ import pandas as pd
 
 
 def test_degradation_ratio_not_sign_flipped_on_negative_in_sample():
-    from alphafx.agents import WalkForwardAgent  # noqa: F401
-
     # Directly exercise the guard: negative in-sample Sharpe must not flip the sign.
     in_sharpe_neg = -0.5
     out_sharpe = 0.4

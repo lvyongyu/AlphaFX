@@ -5,6 +5,7 @@ import streamlit as st
 
 from alphafx.ml import ml_rule_agreement
 
+from alphafx.dashboard.cache import cached_backtest
 from alphafx.dashboard.context import ResearchContext
 
 
@@ -12,9 +13,7 @@ def render(ctx: ResearchContext) -> None:
     start = ctx.start
     end = ctx.end
     leverage = ctx.leverage
-    backtest_agent = ctx.backtest_agent
     market_data = ctx.market_data
-    features = ctx.features
     signals = ctx.signals
     latest_signal = ctx.latest_signal
     ml_result = ctx.ml_result
@@ -47,8 +46,8 @@ def render(ctx: ResearchContext) -> None:
 
     if not ml_signals.empty:
         st.subheader("Rule vs ML backtest (same dates, costs, leverage)")
-        rule_bt, rule_m = backtest_agent.run(market_data, signals, start, end, leverage=leverage)
-        ml_bt, ml_m = backtest_agent.run(market_data, ml_signals, start, end, leverage=leverage)
+        rule_bt, rule_m = cached_backtest(market_data, signals, start, end, leverage)
+        ml_bt, ml_m = cached_backtest(market_data, ml_signals, start, end, leverage)
         keys = ["total_return", "sharpe", "max_drawdown", "win_rate", "number_of_trades", "strategy_vs_random_percentile"]
         st.dataframe(
             pd.DataFrame(

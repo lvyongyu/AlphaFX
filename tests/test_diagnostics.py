@@ -19,8 +19,6 @@ def test_forward_return_diagnostics():
 
 
 def test_forward_diagnostics_reports_effective_sample_size():
-    from alphafx.agents import FactorDiagnosticsAgent  # noqa: F401 - import side-effect free
-
     market = sample_market_data()
     features = FeatureAgent().build_features(market)
     signals = QuantSignalAgent().generate_signals(features)
