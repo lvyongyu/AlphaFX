@@ -10,6 +10,26 @@ DATA_DIR = ROOT_DIR / "data"
 DB_PATH = DATA_DIR / "alphafx.db"
 
 
+def load_local_env(path: str | Path | None = None) -> None:
+    """Load KEY=VALUE lines from a local .env into os.environ (no dependency).
+
+    Used by both the headless CLI and the app so a gitignored .env enables the
+    LLM locally. Existing env vars win (setdefault); missing file is a no-op.
+    """
+    env_path = Path(path) if path else ROOT_DIR / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
 @dataclass(frozen=True)
 class Symbols:
     audusd: str = "AUDUSD=X"

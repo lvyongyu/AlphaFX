@@ -115,6 +115,23 @@ CREATE TABLE IF NOT EXISTS backtest_daily_results (
     FOREIGN KEY(run_id) REFERENCES backtest_runs(id)
 );
 
+CREATE TABLE IF NOT EXISTS paper_positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instrument TEXT NOT NULL,
+    side TEXT NOT NULL,
+    units INTEGER NOT NULL,
+    entry_price REAL,
+    entry_date TEXT,
+    stop_loss_pct REAL,
+    take_profit_pct REAL,
+    exit_price REAL,
+    exit_date TEXT,
+    exit_reason TEXT,
+    realised_pnl REAL,
+    status TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS llm_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT,
@@ -282,6 +299,47 @@ class Database:
             return pd.read_sql_query(
                 "SELECT * FROM llm_calls ORDER BY id DESC LIMIT ?", conn, params=[int(limit)]
             )
+
+    def insert_paper_position(self, row: dict[str, object]) -> int:
+        columns = [
+            "instrument",
+            "side",
+            "units",
+            "entry_price",
+            "entry_date",
+            "stop_loss_pct",
+            "take_profit_pct",
+            "status",
+        ]
+        values = [row.get(c) for c in columns]
+        sql = f"INSERT INTO paper_positions ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})"
+        with self.connect() as conn:
+            cur = conn.execute(sql, values)
+            return int(cur.lastrowid)
+
+    def close_paper_position(
+        self, position_id: int, exit_price: float, exit_date: str, exit_reason: str, realised_pnl: float
+    ) -> None:
+        sql = """
+        UPDATE paper_positions
+        SET exit_price = ?, exit_date = ?, exit_reason = ?, realised_pnl = ?, status = 'closed'
+        WHERE id = ?
+        """
+        with self.connect() as conn:
+            conn.execute(sql, [exit_price, exit_date, exit_reason, realised_pnl, int(position_id)])
+
+    def load_open_positions(self, instrument: str | None = None) -> pd.DataFrame:
+        where = "WHERE status = 'open'"
+        params: list[object] = []
+        if instrument:
+            where += " AND instrument = ?"
+            params.append(instrument)
+        with self.connect() as conn:
+            return pd.read_sql_query(f"SELECT * FROM paper_positions {where} ORDER BY id", conn, params=params)
+
+    def load_paper_positions(self) -> pd.DataFrame:
+        with self.connect() as conn:
+            return pd.read_sql_query("SELECT * FROM paper_positions ORDER BY id", conn)
 
     def save_features(self, features: pd.DataFrame) -> None:
         if features.empty:

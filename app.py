@@ -17,6 +17,7 @@ from alphafx.dashboard.tabs import (  # noqa: E402
     hero,
     journal,
     ml,
+    positions,
     validation,
 )
 
@@ -70,5 +71,7 @@ with st.expander("🔬  Validation & ML"):
     ml.render(ctx)
 with st.expander("📄  Full AI report"):
     ai_report.render(ctx)
+with st.expander("📌  Paper positions"):
+    positions.render(ctx)
 with st.expander("📓  Paper journal"):
     journal.render(ctx)
