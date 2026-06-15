@@ -224,6 +224,19 @@ with tabs[2]:
     if not bt_data.empty:
         st.plotly_chart(px.line(bt_data, x="date", y="equity", title="Equity Curve"), use_container_width=True)
         st.plotly_chart(px.area(bt_data, x="date", y="drawdown", title="Drawdown"), use_container_width=True)
+
+        yearly = backtest_agent.yearly_returns(bt_data)
+        if not yearly.empty:
+            st.subheader("Yearly Returns")
+            st.caption("Exposes regime concentration — an edge living in one year/regime shows up here.")
+            st.bar_chart(yearly.set_index("year")["return"])
+
+        roll = bt_data.assign(date=pd.to_datetime(bt_data["date"])).set_index("date")["strategy_return"]
+        rolling_sharpe = (roll.rolling(63).mean() / roll.rolling(63).std()) * (252 ** 0.5)
+        if rolling_sharpe.notna().any():
+            st.subheader("Rolling Sharpe (63d)")
+            st.line_chart(rolling_sharpe.dropna())
+
         st.dataframe(pd.DataFrame([metrics]), use_container_width=True)
         if hasattr(backtest_agent, "last_trades") and not backtest_agent.last_trades.empty:
             st.subheader("Trade List")
@@ -236,6 +249,14 @@ with tabs[2]:
             ),
             use_container_width=True,
             hide_index=True,
+        )
+        percentile = metrics.get("strategy_vs_random_percentile", 0.0)
+        st.metric("Strategy vs random percentile", fmt_pct(percentile))
+        st.caption(
+            f"The strategy beats {percentile:.0%} of 200 random baselines "
+            f"(random mean {fmt_pct(metrics.get('benchmark_random_mean'))}, "
+            f"5–95% band {fmt_pct(metrics.get('benchmark_random_p05'))} to {fmt_pct(metrics.get('benchmark_random_p95'))}). "
+            "A high percentile is evidence the edge is not luck; near 50% means it is indistinguishable from random."
         )
 
 with tabs[3]:

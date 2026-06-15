@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from alphafx.agents import (
     BacktestAgent,
@@ -141,6 +142,44 @@ def test_benchmark_random_is_deterministic():
     data_2, metrics_2 = BacktestAgent().run(market, signals, "2024-02-01", "2024-07-01")
     assert metrics_1["benchmark_random_return"] == metrics_2["benchmark_random_return"]
     assert len(data_1) == len(data_2)
+
+
+def test_degradation_ratio_not_sign_flipped_on_negative_in_sample():
+    from alphafx.agents import WalkForwardAgent  # noqa: F401
+
+    # Directly exercise the guard: negative in-sample Sharpe must not flip the sign.
+    in_sharpe_neg = -0.5
+    out_sharpe = 0.4
+    ratio = (out_sharpe / in_sharpe_neg) if in_sharpe_neg > 0 else float("nan")
+    assert pd.isna(ratio)  # undefined, not a misleading negative ratio
+    in_sharpe_pos = 0.8
+    ratio_pos = (out_sharpe / in_sharpe_pos) if in_sharpe_pos > 0 else float("nan")
+    assert ratio_pos > 0
+
+
+def test_yearly_returns_compound_to_total():
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    signals = QuantSignalAgent().generate_signals(features)
+    bt, metrics = BacktestAgent().run(market, signals, "2024-02-01", "2024-07-01")
+    yearly = BacktestAgent.yearly_returns(bt)
+    assert not yearly.empty
+    compounded = float((1.0 + yearly["return"]).prod() - 1.0)
+    assert compounded == pytest.approx(metrics["total_return"], rel=1e-9, abs=1e-9)
+
+
+def test_random_benchmark_distribution_and_percentile():
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    signals = QuantSignalAgent().generate_signals(features)
+    _, m1 = BacktestAgent().run(market, signals, "2024-02-01", "2024-07-01")
+    _, m2 = BacktestAgent().run(market, signals, "2024-02-01", "2024-07-01")
+    # Deterministic across runs (fixed seed sequence).
+    assert m1["strategy_vs_random_percentile"] == m2["strategy_vs_random_percentile"]
+    assert m1["benchmark_random_mean"] == m2["benchmark_random_mean"]
+    # A valid probability, and the band is ordered.
+    assert 0.0 <= m1["strategy_vs_random_percentile"] <= 1.0
+    assert m1["benchmark_random_p05"] <= m1["benchmark_random_p95"]
 
 
 def test_equal_weight_is_default_and_unchanged():

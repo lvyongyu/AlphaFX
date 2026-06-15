@@ -671,6 +671,22 @@ class BacktestAgent:
         return out
 
     @staticmethod
+    def yearly_returns(data: pd.DataFrame) -> pd.DataFrame:
+        """Compounded strategy return per calendar year — exposes regime concentration.
+
+        The per-year compounded returns multiply back to the full-window total
+        return, so a strategy whose edge lives in one regime/year is visible.
+        """
+        if data.empty or "strategy_return" not in data.columns:
+            return pd.DataFrame(columns=["year", "return"])
+        d = data.assign(date=pd.to_datetime(data["date"]))
+        d["year"] = d["date"].dt.year
+        out = (
+            d.groupby("year")["strategy_return"].apply(lambda r: float((1.0 + r).prod() - 1.0)).reset_index()
+        )
+        return out.rename(columns={"strategy_return": "return"})
+
+    @staticmethod
     def calculate_metrics(data: pd.DataFrame) -> dict[str, float]:
         if data.empty:
             return BacktestAgent.empty_metrics()
@@ -708,7 +724,7 @@ class BacktestAgent:
         }
 
     @staticmethod
-    def benchmark_metrics(data: pd.DataFrame, holding_period: int = 20) -> dict[str, float]:
+    def benchmark_metrics(data: pd.DataFrame, holding_period: int = 20, random_seeds: int = 200) -> dict[str, float]:
         daily = data["daily_return"].fillna(0.0)
         close = data["close"]
         rng = np.random.default_rng(42)
@@ -717,10 +733,26 @@ class BacktestAgent:
         sma_slow = close.rolling(60).mean()
         sma_position = pd.Series(np.where(sma_fast > sma_slow, 1.0, -1.0), index=data.index).shift(1).fillna(0.0)
         momentum_position = pd.Series(np.where(close.pct_change(holding_period) > 0, 1.0, -1.0), index=data.index).shift(1).fillna(0.0)
+
+        # A single random draw is reproducible but is not a significance test.
+        # Build a distribution over many fixed seeds and report the strategy's
+        # percentile within it (the fraction of random baselines it beats).
+        random_returns = np.array(
+            [
+                float((1.0 + pd.Series(np.random.default_rng(s).choice([-1.0, 0.0, 1.0], len(data)), index=data.index).shift(1).fillna(0.0) * daily).prod() - 1.0)
+                for s in range(int(random_seeds))
+            ]
+        )
+        strategy_total = float(data["equity"].iloc[-1] - 1.0) if "equity" in data.columns and len(data) else 0.0
+        percentile = float((random_returns < strategy_total).mean()) if len(random_returns) else 0.0
         return {
             "benchmark_buy_hold_return": float((1.0 + daily).prod() - 1.0),
             "benchmark_flat_return": 0.0,
             "benchmark_random_return": float((1.0 + random_position * daily).prod() - 1.0),
+            "benchmark_random_mean": float(random_returns.mean()) if len(random_returns) else 0.0,
+            "benchmark_random_p05": float(np.percentile(random_returns, 5)) if len(random_returns) else 0.0,
+            "benchmark_random_p95": float(np.percentile(random_returns, 95)) if len(random_returns) else 0.0,
+            "strategy_vs_random_percentile": percentile,
             "benchmark_sma_return": float((1.0 + sma_position * daily).prod() - 1.0),
             "benchmark_momentum_return": float((1.0 + momentum_position * daily).prod() - 1.0),
         }
@@ -799,7 +831,11 @@ class WalkForwardAgent:
                     "test_end": test["date"].max(),
                     "in_sample_sharpe": in_metrics["sharpe"],
                     "out_sample_sharpe": metrics["sharpe"],
-                    "degradation_ratio": metrics["sharpe"] / in_metrics["sharpe"] if in_metrics["sharpe"] else 0.0,
+                    # Only meaningful when in-sample Sharpe is positive; a negative
+                    # denominator would flip the ratio's sign and invert its meaning.
+                    "degradation_ratio": (
+                        metrics["sharpe"] / in_metrics["sharpe"] if in_metrics["sharpe"] > 0 else float("nan")
+                    ),
                     "out_sample_return": metrics["total_return"],
                     "out_sample_drawdown": metrics["max_drawdown"],
                     "trades": metrics["number_of_trades"],
