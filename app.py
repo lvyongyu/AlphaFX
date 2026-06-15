@@ -20,7 +20,9 @@ from alphafx.agents import (
     SignalDiagnosticsAgent,
     WalkForwardAgent,
 )
-from alphafx.config import DEFAULT_SYMBOLS
+from alphafx.config import DEFAULT_SYMBOLS, llm_enabled
+from alphafx.database import Database
+from alphafx.llm import LLMContrarianAgent, LLMExplanationAgent, LLMJudgeAgent
 
 
 st.set_page_config(page_title="AlphaFX AUD/USD Research Platform", page_icon="FX", layout="wide")
@@ -72,6 +74,13 @@ with st.sidebar:
     end = st.date_input("End date", default_end)
     leverage = st.slider("Paper leverage", min_value=1.0, max_value=5.0, value=2.0, step=0.5)
     st.caption("Research and paper trading only. No live order execution.")
+    use_llm = st.toggle(
+        "Use LLM explanations",
+        value=llm_enabled(),
+        help="When off, deterministic template explanations are used. The LLM never sets the signal.",
+    )
+    if use_llm and not llm_enabled():
+        st.caption("Set ANTHROPIC_API_KEY to enable the LLM. Falling back to templates for now.")
     refresh = st.button("Download market + macro data", type="primary", use_container_width=True)
 
 data_agent = DataAgent()
@@ -116,9 +125,18 @@ risk = risk_agent.suggest(
     volatility=latest_feature.get("audusd_vol_20d"),
     user_leverage=leverage,
 )
-explanation = explain_agent.explain(latest_signal, factor_table)
-contrarian = contrarian_agent.critique(latest_signal, factor_table)
-judgement = judge_agent.judge(latest_signal, risk, explanation, contrarian)
+# The LLM only runs here, on the latest signal — never inside the Backtest or
+# Walk-Forward tabs (those stay fully numeric). LLM agents fall back to the
+# template agents on any error or when no API key is set.
+if use_llm:
+    audit_db = Database()
+    explanation = LLMExplanationAgent(fallback=explain_agent, db=audit_db).explain(latest_signal, factor_table)
+    contrarian = LLMContrarianAgent(fallback=contrarian_agent, db=audit_db).critique(latest_signal, factor_table)
+    judgement = LLMJudgeAgent(fallback=judge_agent, db=audit_db).judge(latest_signal, risk, explanation, contrarian)
+else:
+    explanation = explain_agent.explain(latest_signal, factor_table)
+    contrarian = contrarian_agent.critique(latest_signal, factor_table)
+    judgement = judge_agent.judge(latest_signal, risk, explanation, contrarian)
 aud_latest = market_data[market_data["symbol"] == DEFAULT_SYMBOLS.audusd].sort_values("date").iloc[-1]["close"]
 paper_journal_agent.record_signal(latest_feature, latest_signal, factor_table, risk, judgement["explanation"], audusd_price=float(aud_latest))
 
@@ -236,6 +254,12 @@ with tabs[5]:
 
 with tabs[6]:
     st.subheader("AI Report")
+    report_mode = "LLM" if use_llm else "Template"
+    st.caption(
+        f"Mode: {report_mode}. The quant model sets the signal, score, and probability. "
+        "The LLM only explains, challenges, and summarizes — it never sets the signal."
+    )
+    st.write(f"Probability source: `{latest_signal.get('probability_source', 'fallback_score_map')}`")
     bullish = factor_table[factor_table["stance"] == "bullish"]["factor"].tolist()
     bearish = factor_table[factor_table["stance"] == "bearish"]["factor"].tolist()
 
@@ -262,3 +286,17 @@ Suggested action: **{risk.action}**. Leverage: **{risk.leverage:.1f}x**. Stop lo
 {contrarian["watch"]}
 """
     )
+
+    if use_llm:
+        with st.expander("LLM call audit log"):
+            calls = Database().load_llm_calls(limit=20)
+            if calls.empty:
+                st.info("No LLM calls logged yet — template fallback may be active (no API key or a call failed).")
+            else:
+                st.dataframe(
+                    calls[
+                        ["created_at", "date", "role", "model", "input_tokens", "output_tokens", "cache_read_tokens", "prompt_hash"]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )

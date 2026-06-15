@@ -114,6 +114,22 @@ CREATE TABLE IF NOT EXISTS backtest_daily_results (
     drawdown REAL,
     FOREIGN KEY(run_id) REFERENCES backtest_runs(id)
 );
+
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT,
+    role TEXT,
+    model TEXT,
+    prompt_hash TEXT,
+    system_prompt TEXT,
+    user_payload TEXT,
+    response_text TEXT,
+    structured_output TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -237,6 +253,35 @@ class Database:
     def load_paper_journal(self) -> pd.DataFrame:
         with self.connect() as conn:
             return pd.read_sql_query("SELECT * FROM paper_journal ORDER BY date", conn, parse_dates=["date"])
+
+    def log_llm_call(self, row: dict[str, object]) -> None:
+        """Persist one LLM call so any explanation can be reproduced/reviewed."""
+        columns = [
+            "date",
+            "role",
+            "model",
+            "prompt_hash",
+            "system_prompt",
+            "user_payload",
+            "response_text",
+            "structured_output",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+        ]
+        values = [row.get(column) for column in columns]
+        sql = f"""
+        INSERT INTO llm_calls ({", ".join(columns)})
+        VALUES ({", ".join("?" for _ in columns)})
+        """
+        with self.connect() as conn:
+            conn.execute(sql, values)
+
+    def load_llm_calls(self, limit: int = 50) -> pd.DataFrame:
+        with self.connect() as conn:
+            return pd.read_sql_query(
+                "SELECT * FROM llm_calls ORDER BY id DESC LIMIT ?", conn, params=[int(limit)]
+            )
 
     def save_features(self, features: pd.DataFrame) -> None:
         if features.empty:
