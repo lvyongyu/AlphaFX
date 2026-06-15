@@ -137,6 +137,116 @@ def test_benchmark_random_is_deterministic():
     assert len(data_1) == len(data_2)
 
 
+def test_macro_alignment_applies_publication_lag():
+    # A macro value observed on a date must not appear in features until the
+    # publication lag has passed (no vintage/revised look-ahead).
+    fa = FeatureAgent()
+    index = pd.bdate_range("2024-01-01", periods=20)
+    frame = pd.DataFrame({"date": ["2024-01-03", "2024-01-10"], "value": [1.0, 2.0]})
+    aligned = fa._align_optional_series(index, frame, lag_days=3)
+    assert aligned.loc[pd.Timestamp("2024-01-10")] == 1.0  # new obs not yet available
+    assert aligned.loc[pd.Timestamp("2024-01-15")] == 2.0  # available after the 3-day lag
+
+    # With no lag the value would leak onto its own observation date.
+    no_lag = fa._align_optional_series(index, frame, lag_days=0)
+    assert no_lag.loc[pd.Timestamp("2024-01-10")] == 2.0
+
+
+def test_forward_diagnostics_reports_effective_sample_size():
+    from alphafx.agents import FactorDiagnosticsAgent  # noqa: F401 - import side-effect free
+
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    signals = QuantSignalAgent().generate_signals(features)
+    diag = SignalDiagnosticsAgent().forward_return_diagnostics(market, signals, horizons=(20,))
+    bullish = diag[diag["signal"] == "bullish"].iloc[0]
+    # Independent count discounts the overlapping daily sample.
+    assert bullish["effective_sample_size"] == bullish["sample_size"] // 20
+    assert bullish["effective_sample_size"] < bullish["sample_size"]
+    # Overlap-adjusted significance never exceeds the naive t-stat.
+    assert abs(bullish["mean_t_stat_adjusted"]) <= abs(bullish["mean_t_stat"])
+
+
+def test_factor_ic_significance_discounted_for_overlap():
+    from alphafx.agents import FactorDiagnosticsAgent
+
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    diag = FactorDiagnosticsAgent().analyze(features, horizon=20)
+    assert not diag.empty
+    row = diag.iloc[0]
+    assert row["effective_sample_size"] <= row["sample_size"]
+    assert abs(row["ic_t_stat_adjusted"]) <= abs(row["ic_t_stat"])
+
+
+def _flat_trade_data(signal: str) -> pd.DataFrame:
+    dates = pd.bdate_range("2024-01-01", periods=30)
+    return pd.DataFrame(
+        {"date": dates, "close": [0.65] * 30, "signal": [signal] * 30, "daily_return": [0.0] * 30}
+    )
+
+
+def test_swap_carry_signs_by_direction():
+    long_trades = BacktestAgent().build_trades(
+        _flat_trade_data("bullish"), holding_period=10, leverage=1.0,
+        transaction_cost_bps=0, spread_bps=0, slippage_bps=0, rollover_bps_per_day=0, swap_annual_pct=2.0,
+    )
+    short_trades = BacktestAgent().build_trades(
+        _flat_trade_data("bearish"), holding_period=10, leverage=1.0,
+        transaction_cost_bps=0, spread_bps=0, slippage_bps=0, rollover_bps_per_day=0, swap_annual_pct=2.0,
+    )
+    # Long AUD earns positive carry when the AU-US differential is positive; short pays it.
+    assert long_trades.iloc[0]["carry"] > 0
+    assert short_trades.iloc[0]["carry"] < 0
+    assert long_trades.iloc[0]["realised_return"] > short_trades.iloc[0]["realised_return"]
+
+
+def test_broker_swap_markup_reduces_return():
+    base = BacktestAgent().build_trades(
+        _flat_trade_data("bullish"), holding_period=10, leverage=1.0,
+        transaction_cost_bps=0, spread_bps=0, slippage_bps=0, rollover_bps_per_day=0.0, swap_annual_pct=0.0,
+    )
+    costed = BacktestAgent().build_trades(
+        _flat_trade_data("bullish"), holding_period=10, leverage=1.0,
+        transaction_cost_bps=0, spread_bps=0, slippage_bps=0, rollover_bps_per_day=0.5, swap_annual_pct=0.0,
+    )
+    assert costed.iloc[0]["realised_return"] < base.iloc[0]["realised_return"]
+
+
+def test_calibration_frame_is_backward_looking():
+    # Perturbing only the LAST trading days must not change the calibrated
+    # probability for early dates — proving calibration_frame has no future leak.
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    raw = QuantSignalAgent().generate_signals(features)
+    cal_a = SignalDiagnosticsAgent().calibration_frame(market, raw, horizon=20, min_samples=5)
+
+    market2 = market.copy()
+    aud_mask = market2["symbol"] == DEFAULT_SYMBOLS.audusd
+    aud_dates = sorted(pd.to_datetime(market2.loc[aud_mask, "date"]).unique())
+    tail = set(aud_dates[-10:])
+    market2.loc[aud_mask & pd.to_datetime(market2["date"]).isin(tail), "close"] *= 1.5
+    cal_b = SignalDiagnosticsAgent().calibration_frame(market2, raw, horizon=20, min_samples=5)
+
+    merged = cal_a.merge(cal_b, on="date", suffixes=("_a", "_b"))
+    cutoff = pd.Timestamp(sorted(tail)[0]) - pd.Timedelta(days=40)
+    early = merged[pd.to_datetime(merged["date"]) < cutoff]
+    assert not early.empty
+    assert (early["calibrated_probability_a"] == early["calibrated_probability_b"]).all()
+
+
+def test_walkforward_calibration_is_labelled_distinctly():
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    raw = QuantSignalAgent().generate_signals(features)
+    wf_cal = SignalDiagnosticsAgent().make_walkforward_calibration(market, raw, horizon=20, min_samples=5)
+    signals = QuantSignalAgent().generate_signals(features, calibration=wf_cal)
+    active = signals[signals["probability_source"] == "walkforward_calibration"]
+    assert not active.empty
+    # The old full-sample method name is gone, so it cannot be misused live.
+    assert not hasattr(SignalDiagnosticsAgent, "calibration_map")
+
+
 def test_fred_parser_normalizes_macro_data():
     raw = pd.DataFrame({"observation_date": ["2024-01-01", "2024-01-02"], "DGS2": ["4.2", "."]})
     parsed = FREDProvider("DGS2", "US2Y", "daily").parse(raw)

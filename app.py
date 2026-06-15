@@ -159,6 +159,11 @@ with tabs[0]:
     with st.expander("Data completeness"):
         st.dataframe(data_agent.completeness_report(market_data), use_container_width=True)
         st.dataframe(data_agent.macro_status_report(macro_data), use_container_width=True)
+        st.caption(
+            "Macro factors are revised series applied with a publication lag "
+            "(yields ~1 business day, iron ore ~21), so each value enters features "
+            "only as-of when it would have been available — not point-in-time vintage data."
+        )
 
 with tabs[1]:
     st.subheader("Factor Contributions")
@@ -186,11 +191,27 @@ with tabs[2]:
     bt_end = col2.date_input("Backtest end", end, key="bt_end")
     holding = col3.number_input("Holding period", min_value=5, max_value=60, value=20, step=5)
     cost = col4.number_input("Transaction cost bps", min_value=0.0, max_value=50.0, value=2.0, step=0.5)
-    c1, c2, c3 = st.columns(3)
-    spread = c1.number_input("Spread bps", min_value=0.0, max_value=50.0, value=1.0, step=0.5)
+    c1, c2, c3, c4 = st.columns(4)
+    spread = c1.number_input("Spread bps", min_value=0.0, max_value=50.0, value=1.5, step=0.5)
     slippage = c2.number_input("Slippage bps", min_value=0.0, max_value=50.0, value=1.0, step=0.5)
-    rollover = c3.number_input("Rollover bps / day placeholder", min_value=0.0, max_value=10.0, value=0.0, step=0.1)
-    bt_data, metrics = backtest_agent.run(market_data, signals, bt_start, bt_end, holding, leverage, cost, spread, slippage, rollover)
+    broker_swap = c3.number_input("Broker swap markup bps/day", min_value=0.0, max_value=10.0, value=0.3, step=0.1)
+    spread_value = latest_feature.get("yield_spread")
+    default_swap = float(spread_value) if spread_value is not None and not pd.isna(spread_value) else 0.0
+    swap = c4.number_input(
+        "AU−US carry % (annual)",
+        min_value=-10.0,
+        max_value=10.0,
+        value=round(default_swap, 2),
+        step=0.25,
+        help="Signed overnight interest differential. Long AUD earns it when positive; short pays it.",
+    )
+    st.caption(
+        f"Costs applied: spread {spread} bps + slippage {slippage} bps (round trip), "
+        f"broker swap {broker_swap} bps/day, and a directional carry of {swap}%/yr."
+    )
+    bt_data, metrics = backtest_agent.run(
+        market_data, signals, bt_start, bt_end, holding, leverage, cost, spread, slippage, broker_swap, swap
+    )
 
     metric_cols = st.columns(6)
     for col, key in zip(
@@ -220,6 +241,10 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("Signal Diagnostics")
     st.caption("Forward-return statistics are historical diagnostics, not a profit forecast.")
+    st.caption(
+        "`effective_sample_size` ≈ sample_size / horizon counts independent (non-overlapping) "
+        "observations; `mean_t_stat_adjusted` discounts the naive t-stat for overlap."
+    )
     if forward_diagnostics.empty:
         st.info("Not enough history for signal diagnostics yet.")
     else:
@@ -238,6 +263,10 @@ with tabs[4]:
         st.dataframe(wf, use_container_width=True, hide_index=True)
 
     st.subheader("Factor Diagnostics")
+    st.caption(
+        "`ic_t_stat_adjusted` uses the independent (non-overlapping) sample size, so it does "
+        "not overstate the information coefficient's significance the way the naive t-stat does."
+    )
     factor_diag = factor_diagnostics_agent.analyze(features)
     if factor_diag.empty:
         st.info("Not enough complete feature history for factor diagnostics.")

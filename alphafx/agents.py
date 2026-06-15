@@ -127,6 +127,12 @@ class DataAgent:
 
 
 class FeatureAgent:
+    # Macro series are revised; using the revised value on its observation date is
+    # look-ahead. Apply a conservative publication lag (in business days) so each
+    # macro value only enters features once it would actually have been available.
+    YIELD_PUBLICATION_LAG_DAYS = 1
+    IRON_ORE_PUBLICATION_LAG_DAYS = 21
+
     def __init__(self, db: Database | None = None) -> None:
         self.db = db or Database()
 
@@ -164,11 +170,11 @@ class FeatureAgent:
             us2y = us2y if us2y is not None else self._macro_symbol_frame(macro_data, "US2Y")
             iron_ore = iron_ore if iron_ore is not None else self._macro_symbol_frame(macro_data, "IRON_ORE")
 
-        spread = self._build_yield_spread(features.index, au2y, us2y)
+        spread = self._build_yield_spread(features.index, au2y, us2y, lag_days=self.YIELD_PUBLICATION_LAG_DAYS)
         features["yield_spread"] = spread
         features["yield_spread_change_20d"] = spread.diff(20) if spread is not None else np.nan
 
-        iron = self._align_optional_series(features.index, iron_ore)
+        iron = self._align_optional_series(features.index, iron_ore, lag_days=self.IRON_ORE_PUBLICATION_LAG_DAYS)
         features["ironore_return_20d"] = iron.pct_change(20, fill_method=None) if iron is not None else np.nan
 
         features = features.reset_index().rename(columns={"index": "date"})
@@ -198,14 +204,17 @@ class FeatureAgent:
         index: pd.DatetimeIndex,
         au2y: pd.DataFrame | None,
         us2y: pd.DataFrame | None,
+        lag_days: int = 0,
     ) -> pd.Series | None:
-        au = self._align_optional_series(index, au2y)
-        us = self._align_optional_series(index, us2y)
+        au = self._align_optional_series(index, au2y, lag_days=lag_days)
+        us = self._align_optional_series(index, us2y, lag_days=lag_days)
         if au is None or us is None:
             return None
         return au - us
 
-    def _align_optional_series(self, index: pd.DatetimeIndex, frame: pd.DataFrame | None) -> pd.Series | None:
+    def _align_optional_series(
+        self, index: pd.DatetimeIndex, frame: pd.DataFrame | None, lag_days: int = 0
+    ) -> pd.Series | None:
         if frame is None or frame.empty:
             return None
         df = frame.copy()
@@ -219,6 +228,9 @@ class FeatureAgent:
         if value_column is None:
             return None
         series = pd.Series(df[value_column].values, index=pd.to_datetime(df["date"])).sort_index()
+        if lag_days:
+            # An observation only becomes available `lag_days` business days later.
+            series.index = series.index + pd.offsets.BusinessDay(lag_days)
         return series.reindex(index).ffill()
 
 
@@ -229,6 +241,15 @@ class QuantSignalAgent:
         self.db = db or Database()
 
     def generate_signals(self, features: pd.DataFrame, calibration: pd.DataFrame | dict[str, float] | None = None) -> pd.DataFrame:
+        # `calibration` accepts two shapes with very different look-ahead profiles:
+        #   - DataFrame  -> expanding-window, per-date calibrated probability
+        #                   (SignalDiagnosticsAgent.calibration_frame). Safe for
+        #                   the live/latest signal. Labelled "historical_calibration".
+        #   - dict       -> a single full-sample hit rate per signal class. This is
+        #                   IN-SAMPLE and only valid on walk-forward TRAIN data
+        #                   (make_walkforward_calibration). Labelled
+        #                   "walkforward_calibration" so it can never be mistaken
+        #                   for a backward-looking live probability.
         if features.empty:
             return pd.DataFrame()
         out = features[["date"]].copy()
@@ -248,7 +269,8 @@ class QuantSignalAgent:
             mapped = out["signal"].map(calibration)
             calibrated = mapped.notna()
             out.loc[calibrated, "probability"] = mapped[calibrated]
-            out.loc[calibrated, "probability_source"] = "historical_calibration"
+            # In-sample walk-forward calibration only — never a live probability.
+            out.loc[calibrated, "probability_source"] = "walkforward_calibration"
             out.loc[calibrated, "calibration_sample_size"] = -1
         elif isinstance(calibration, pd.DataFrame) and not calibration.empty:
             out = out.drop(columns=["calibration_sample_size"]).merge(
@@ -313,21 +335,49 @@ class SignalDiagnosticsAgent:
             for signal, group in frame.groupby("signal"):
                 returns = group["forward_return"].dropna()
                 directional = self.directional_outcome(signal, returns)
+                strategy = self.strategy_returns(signal, returns)
+                # Daily-overlapping h-day forward returns are autocorrelated, so
+                # the raw count overstates significance. Discount to independent
+                # observations (~ N / horizon) and report an overlap-adjusted
+                # t-stat alongside the naive one.
+                effective_n = int(len(returns) // max(horizon, 1))
+                t_naive, t_adjusted = self.mean_t_stats(strategy, effective_n)
                 rows.append(
                     {
                         "signal": signal,
                         "horizon": horizon,
                         "sample_size": int(len(returns)),
+                        "effective_sample_size": effective_n,
                         "average_forward_return": float(returns.mean()) if len(returns) else 0.0,
                         "median_forward_return": float(returns.median()) if len(returns) else 0.0,
                         "hit_rate": float(directional.mean()) if len(directional) else 0.0,
                         "win_loss_ratio": self.win_loss_ratio(returns),
-                        "max_drawdown": BacktestAgent.max_drawdown_from_returns(self.strategy_returns(signal, returns)),
-                        "sharpe": BacktestAgent.sharpe(self.strategy_returns(signal, returns)),
-                        "profit_factor": BacktestAgent.profit_factor(self.strategy_returns(signal, returns)),
+                        "max_drawdown": BacktestAgent.max_drawdown_from_returns(strategy),
+                        "sharpe": BacktestAgent.sharpe(strategy),
+                        "profit_factor": BacktestAgent.profit_factor(strategy),
+                        "mean_t_stat": t_naive,
+                        "mean_t_stat_adjusted": t_adjusted,
                     }
                 )
         return pd.DataFrame(rows)
+
+    @staticmethod
+    def mean_t_stats(returns: pd.Series, effective_n: int) -> tuple[float, float]:
+        """t-stat of the mean: naive (every obs independent) vs overlap-adjusted.
+
+        The adjusted t-stat uses the independent count instead of the raw count,
+        so it never overstates significance more than the naive one.
+        """
+        returns = returns.dropna()
+        n = len(returns)
+        std = float(returns.std(ddof=1)) if n > 1 else 0.0
+        if n < 2 or std == 0.0:
+            return 0.0, 0.0
+        mean = float(returns.mean())
+        t_naive = mean / (std / np.sqrt(n))
+        eff = max(1, min(effective_n, n))
+        t_adjusted = mean / (std / np.sqrt(eff))
+        return float(t_naive), float(t_adjusted)
 
     def calibration_frame(
         self,
@@ -358,13 +408,21 @@ class SignalDiagnosticsAgent:
             )
         return pd.DataFrame(probabilities)
 
-    def calibration_map(
+    def make_walkforward_calibration(
         self,
         market_data: pd.DataFrame,
         signals: pd.DataFrame,
         horizon: int = 20,
         min_samples: int = 10,
     ) -> dict[str, float]:
+        """Full-sample hit rate per signal class — WALK-FORWARD TRAIN DATA ONLY.
+
+        This computes the hit rate over the entire `signals` frame it is given,
+        so it is in-sample by construction. It is only valid when `signals` is a
+        walk-forward training slice (no future relative to the test window). Never
+        use it to set the probability of the latest/live signal — use the
+        expanding-window `calibration_frame` for that.
+        """
         diagnostics = self.forward_return_diagnostics(market_data, signals, horizons=(horizon,))
         if diagnostics.empty:
             return {}
@@ -477,6 +535,7 @@ class BacktestAgent:
         spread_bps: float = 0.0,
         slippage_bps: float = 0.0,
         rollover_bps_per_day: float = 0.0,
+        swap_annual_pct: float = 0.0,
     ) -> tuple[pd.DataFrame, dict[str, float]]:
         aud = (
             market_data[market_data["symbol"] == DEFAULT_SYMBOLS.audusd]
@@ -499,6 +558,7 @@ class BacktestAgent:
             spread_bps=spread_bps,
             slippage_bps=slippage_bps,
             rollover_bps_per_day=rollover_bps_per_day,
+            swap_annual_pct=swap_annual_pct,
         )
         data = self.apply_trades_to_daily_frame(data.reset_index(drop=True), trades, leverage=leverage)
         data["equity"] = (1.0 + data["strategy_return"]).cumprod()
@@ -519,10 +579,12 @@ class BacktestAgent:
         spread_bps: float,
         slippage_bps: float,
         rollover_bps_per_day: float,
+        swap_annual_pct: float = 0.0,
     ) -> pd.DataFrame:
         trades: list[dict[str, object]] = []
         i = 0
         round_trip_cost = ((transaction_cost_bps + spread_bps + slippage_bps) * 2.0) / 10000.0
+        daily_carry_rate = (swap_annual_pct / 100.0) / 252.0
         while i < len(data) - 1:
             signal = str(data.iloc[i].get("signal", "neutral"))
             position = 1.0 if signal == "bullish" else -1.0 if signal == "bearish" else 0.0
@@ -535,9 +597,13 @@ class BacktestAgent:
                 break
             entry = data.iloc[entry_idx]
             exit_ = data.iloc[exit_idx]
+            holding_days = exit_idx - entry_idx
             raw_return = (float(exit_["close"]) / float(entry["close"]) - 1.0) * position
-            rollover = (rollover_bps_per_day * (exit_idx - entry_idx)) / 10000.0
-            cost = round_trip_cost + rollover
+            # Broker swap markup is always a cost; carry (AU-US rate differential)
+            # is signed by position: a long AUD earns positive carry when AU > US.
+            broker_swap = (rollover_bps_per_day * holding_days) / 10000.0
+            carry = position * daily_carry_rate * holding_days * leverage
+            cost = round_trip_cost + broker_swap
             trades.append(
                 {
                     "signal_date": data.iloc[i]["date"],
@@ -547,14 +613,15 @@ class BacktestAgent:
                     "score": data.iloc[i].get("score", np.nan),
                     "probability": data.iloc[i].get("probability", np.nan),
                     "position": position,
-                    "holding_period": int(exit_idx - entry_idx),
+                    "holding_period": int(holding_days),
                     "entry_price": float(entry["close"]),
                     "exit_price": float(exit_["close"]),
                     "raw_return": float(raw_return),
                     "transaction_cost": float(round_trip_cost),
-                    "rollover_cost": float(rollover),
+                    "rollover_cost": float(broker_swap),
+                    "carry": float(carry),
                     "cost": float(cost),
-                    "realised_return": float(raw_return * leverage - cost),
+                    "realised_return": float(raw_return * leverage - cost + carry),
                     "status": "closed",
                 }
             )
@@ -574,7 +641,9 @@ class BacktestAgent:
             out.loc[out["date"] == trade["exit_date"], "trade"] = 1.0
         out["strategy_return"] = out["position"].shift(1).fillna(0.0) * out["daily_return"] * leverage
         for _, trade in trades.iterrows():
-            out.loc[out["date"] == trade["exit_date"], "strategy_return"] -= float(trade["cost"])
+            # Net the explicit costs out and the signed carry in, on the exit day.
+            net = float(trade.get("carry", 0.0)) - float(trade["cost"])
+            out.loc[out["date"] == trade["exit_date"], "strategy_return"] += net
         return out
 
     @staticmethod
@@ -694,7 +763,7 @@ class WalkForwardAgent:
             if test.empty:
                 break
             train_signals = signal_agent.generate_signals(train)
-            calibration = diagnostics.calibration_map(market_data, train_signals, horizon=holding_period, min_samples=10)
+            calibration = diagnostics.make_walkforward_calibration(market_data, train_signals, horizon=holding_period, min_samples=10)
             test_signals = signal_agent.generate_signals(test, calibration=calibration)
             bt, metrics = backtester.run(market_data, test_signals, test["date"].min(), test["date"].max(), holding_period=holding_period)
             in_bt, in_metrics = backtester.run(market_data, train_signals, train["date"].min(), train["date"].max(), holding_period=holding_period)
@@ -743,18 +812,36 @@ class FactorDiagnosticsAgent:
             corr = float(pair[column].corr(pair["future_return"]))
             sign = np.sign(pair[column])
             target = np.sign(pair["future_return"])
+            n = int(len(pair))
+            # Overlapping h-day forward returns inflate IC significance; discount
+            # to independent observations (~ N / horizon) for the adjusted t-stat.
+            effective_n = max(1, n // max(horizon, 1))
+            ic_t = self._ic_t_stat(corr, n)
+            ic_t_adjusted = self._ic_t_stat(corr, effective_n)
             rows.append(
                 {
                     "factor": column,
-                    "sample_size": int(len(pair)),
+                    "sample_size": n,
+                    "effective_sample_size": effective_n,
                     "information_coefficient": corr,
                     "coefficient_proxy": corr,
+                    "ic_t_stat": ic_t,
+                    "ic_t_stat_adjusted": ic_t_adjusted,
                     "hit_contribution": float((sign == target).mean()),
                     "stability": self._rolling_stability(pair[column], pair["future_return"]),
                     "feature_importance": abs(corr),
                 }
             )
         return pd.DataFrame(rows).sort_values("feature_importance", ascending=False) if rows else pd.DataFrame()
+
+    @staticmethod
+    def _ic_t_stat(ic: float, n: int) -> float:
+        if n is None or n < 3 or pd.isna(ic):
+            return 0.0
+        denom = 1.0 - ic * ic
+        if denom <= 1e-9:
+            return 0.0
+        return float(ic * np.sqrt(n - 2) / np.sqrt(denom))
 
     def _rolling_stability(self, factor: pd.Series, target: pd.Series, window: int = 126) -> float:
         if len(factor) < window * 2:
