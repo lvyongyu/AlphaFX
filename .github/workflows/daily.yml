@@ -1,0 +1,38 @@
+name: Daily paper trading
+
+on:
+  schedule:
+    - cron: "0 22 * * 1-5"   # 22:00 UTC, Mon–Fri
+  workflow_dispatch: {}        # allow manual runs
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-paper-trading
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run paper trading and export snapshots
+        run: python scripts/paper_trade.py --export
+      - name: Commit updated snapshots
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/latest_signal.json data/paper_positions.csv data/signal_history.csv
+          if git diff --cached --quiet; then
+            echo "No snapshot changes to commit."
+          else
+            git commit -m "data: daily paper-trading update [skip ci]"
+            git push
+          fi
