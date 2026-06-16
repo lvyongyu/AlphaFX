@@ -408,22 +408,109 @@ Example:
 
 This version should connect more directly to stop-loss and take-profit research.
 
-## V4 IBKR Paper Trading
+## Trading Execution Track
 
-Connect to Interactive Brokers paper trading only after backtesting is stable and the signal logic is auditable.
+Execution maturity progresses in three stages, each fully validated before the
+next:
 
-Required before V4:
+1. **Local paper simulation — shipped.** `alphafx/trade/PaperBroker` simulates
+   fills with no broker, no network, and no credentials. The daily job
+   (`scripts/paper_trade.py`, `.github/workflows/daily.yml`) already runs it.
+2. **Broker-connected paper trading — V4.** Execute the signal against broker
+   *demo / practice* accounts to validate real fills, latency, and spreads at
+   zero financial risk.
+3. **Live trading — V5.** Real orders, gated behind hard risk limits and manual
+   approval.
 
-- More robust backtest storage.
-- Clear order preview UI.
-- Manual confirmation flow.
-- Strong separation between research signals and executable orders.
+Non-negotiable execution boundary:
+
+- Execution is a **downstream consumer** of the signal. It never feeds back into
+  signal generation, and it never overrides the `RiskAgent` NO-TRADE gate.
+- Every broker implements one interface. `OrderIntent` (`alphafx/trade/order.py`)
+  is already the contract; `build_order_intent` already translates the
+  deterministic risk decision into an order without consulting the LLM or raw
+  signal. Adding a broker is an adapter change only — signal and risk code stay
+  untouched.
+
+Planned execution-layer structure:
+
+- `alphafx/trade/broker.py` — a `Broker` protocol: `place`, `update`,
+  `positions`, `close`, `reconcile`.
+- Adapters: `PaperBroker` (local, shipped), `OANDABroker` (practice + live REST),
+  `IBKRBroker` (TWS/Gateway paper + live).
+- An order state machine — intended → submitted → filled/rejected → open →
+  closed — with client-side idempotency keys and startup reconciliation against
+  the broker's truth.
+
+## V4 Broker-Connected Paper Trading
+
+Goal: run the daily signal against a broker **demo / practice** account to
+validate order placement, fills, latency, spreads, and reconciliation against
+real market microstructure — still with zero financial risk.
+
+Scope:
+
+- Add the `Broker` interface and a first real adapter. OANDA practice is the
+  recommended first target (simple REST API, FX-native); IBKR paper follows.
+- Credentials supplied only via environment variables, never committed. Demo
+  endpoints are hard-separated from live endpoints in code.
+- Order preview before submission; dry-run mode is the default.
+- Position and fill reconciliation: the broker is the source of truth and the
+  local SQLite mirror is reconciled to it on every run.
+- Slippage / spread capture: compare simulated fills against actual demo fills to
+  calibrate the backtest cost model.
+- Idempotency: stable client order IDs so a re-run can never double-submit.
+- Extend `paper_positions` / journal with broker order id, fill price, and status.
+
+Safeguards:
+
+- A guard refuses live endpoints in V4 — demo only.
+- The NO-TRADE gate is honored, and the existing one-open-position-per-instrument
+  rule still applies.
+
+Acceptance criteria:
+
+- The daily job can open and close orders on a broker demo account with no manual
+  steps, and local state reconciles exactly to the broker's.
+- Simulated vs demo fills are reported so the cost model can be calibrated.
+- Switching brokers is an adapter change only; signal and risk code are untouched.
 
 ## V5 Live Trading
 
-Manual approval required before every live order.
+Connect to live execution only after V4 demo reconciliation has been clean for a
+defined period, walk-forward out-of-sample metrics are stable, the signal logic
+is auditable, and risk limits are documented.
 
-No fully automated live trading initially.
+Design:
+
+- **Manual approval before every live order.** No fully automated live trading
+  initially: a two-step preview → explicit human confirmation flow.
+- **Hard risk guards, independent of the signal,** enforced in code: max risk per
+  trade, max daily loss, max open exposure, max-drawdown kill switch,
+  volatility / regime no-trade, and an event blackout (FOMC, CPI, NFP, RBA).
+- **Kill switch:** a single flag that flattens all positions and halts trading.
+- **Full audit trail:** every intent, approval, submission, fill, and rejection
+  is persisted and timestamped so any live action can be reconstructed.
+- **Capital sizing decoupled** from research units; start at minimal size.
+- **Reconciliation on every startup;** refuse to trade on any mismatch.
+
+Phased rollout:
+
+- V5.0 — micro size, manual confirmation on every order.
+- V5.1 — semi-automated within hard limits, with manual approval still required
+  for any size increase or limit change.
+- No phase removes the manual-approval-by-default stance or the kill switch.
+
+Acceptance criteria:
+
+- No live order is ever sent without an explicit, logged human approval.
+- Hard risk limits and the kill switch are enforced independently of signal logic
+  and are covered by tests.
+- A complete audit trail can reconstruct every live action.
+
+Live-trading non-goals (carried forward): fully automated live trading,
+broker-specific logic leaking into signal generation, options / barrier products
+in this track, and multi-currency execution.
 
 ## V6 Barrier Option Research
 
