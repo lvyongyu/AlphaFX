@@ -37,6 +37,14 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+XGBoost is an optional ML extra and is **not** in the core requirements, so the
+app deploys light and the ML layer falls back to scikit-learn without it. To
+enable the XGBoost path:
+
+```bash
+pip install -r requirements-ml.txt
+```
+
 Run tests:
 
 ```bash
@@ -78,7 +86,8 @@ for comparison — it is **not** a replacement. The rule signal stays primary/li
 - Validation is walk-forward / time-series split only (no random split, no leak),
   and the ML backtest uses out-of-sample predictions only.
 - Primary model is a regularized logistic regression; XGBoost is used if installed
-  (optional), otherwise the app falls back to scikit-learn and still runs.
+  (optional, `requirements-ml.txt`), otherwise the app falls back to scikit-learn
+  and still runs.
 - Because the independent sample is small (~rows / horizon), ML overfits easily;
   the ML tab shows feature importance, per-fold validation metrics, a rule-vs-ML
   backtest, and a prominent small-sample warning.
