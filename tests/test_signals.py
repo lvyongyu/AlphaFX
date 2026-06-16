@@ -24,8 +24,11 @@ def test_signal_mapping_thresholds():
     assert QuantSignalAgent.map_signal(3) == "bullish"
     assert QuantSignalAgent.map_signal(-3) == "bearish"
     assert QuantSignalAgent.map_signal(2) == "neutral"
+    # probability is directional confidence (P(signal correct)), keyed by |score|,
+    # so a strong bearish score maps to a HIGH probability — same as bullish.
     assert QuantSignalAgent.map_probability(5) == 0.70
-    assert QuantSignalAgent.map_probability(-5) == 0.30
+    assert QuantSignalAgent.map_probability(-5) == 0.70
+    assert QuantSignalAgent.map_probability(-3) == 0.60
 
 
 def test_calibrated_probability_uses_prior_outcomes():

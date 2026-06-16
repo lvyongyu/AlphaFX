@@ -19,7 +19,7 @@ flowchart TD
     end
     Y --> DA[DataAgent]
     F --> DA
-    DA --> FE[FeatureAgent<br/>11 factors · macro publication-lagged · point-in-time]
+    DA --> FE[FeatureAgent<br/>10 factors · macro publication-lagged · point-in-time]
     FE --> QS[QuantSignalAgent<br/>5 factors ±1 · equal weight by design]
 
     QS --> CAL{Calibration<br/>expanding-window?}

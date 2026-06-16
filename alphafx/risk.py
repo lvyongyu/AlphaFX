@@ -34,9 +34,12 @@ class RiskAgent:
         if extreme_vol:
             action = "NO TRADE"
             leverage = 1.0
+        # `probability` is directional confidence (P(signal correct)), so the
+        # same >= threshold gates both directions — a confident bearish signal
+        # has a HIGH probability, not a low one.
         elif signal == "bullish" and probability >= 0.60:
             action = "BUY AUD/USD"
-        elif signal == "bearish" and probability <= 0.40:
+        elif signal == "bearish" and probability >= 0.60:
             action = "SELL AUD/USD"
         else:
             action = "NO TRADE"

@@ -151,8 +151,10 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 
 
 class Database:
-    def __init__(self, path: Path = DB_PATH) -> None:
-        self.path = path
+    def __init__(self, path: Path | None = None) -> None:
+        # Resolve the default at call time (not at def time) so tests can redirect
+        # the default DB to a temp path by monkeypatching alphafx.database.DB_PATH.
+        self.path = Path(path) if path is not None else DB_PATH
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.init_schema()
 
