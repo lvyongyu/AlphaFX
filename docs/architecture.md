@@ -74,7 +74,7 @@ flowchart TD
     TPL --> OUT
     LLM -. every call .-> LOG
 
-    SIG --> UI[Streamlit · 8 tabs]
+    SIG --> UI[Streamlit · hero + 7 sections]
     RISK --> UI
     NUM --> UI
     CMP --> UI
