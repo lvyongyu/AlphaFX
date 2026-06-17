@@ -21,16 +21,21 @@ class OrderIntent:
         return self.units != 0
 
 
-def build_order_intent(signal: Any, risk: Any, base_units: int = 1000) -> OrderIntent:
+def build_order_intent(signal: Any, risk: Any, base_units: int = 1000, leverage: float = 1.0) -> OrderIntent:
     """Translate the deterministic risk decision into a broker order intent.
 
     The RiskAgent — not the LLM or the raw signal — decides whether to trade
     (it returns NO TRADE on no edge or extreme volatility). This only formats
     that decision into an order; it never overrides the gate. NO TRADE -> units 0.
+
+    `leverage` scales the traded notional: at 1x the position is `base_units`,
+    at 5x it is 5x that. Absolute PnL (and therefore return on the 1x capital)
+    scales linearly with leverage, which is what makes the loss amplification of
+    high leverage visible in the paper journal.
     """
     action = str(getattr(risk, "action", "NO TRADE")).upper()
     size_factor = 0.5 if getattr(risk, "position_size", "Standard") == "Small" else 1.0
-    units = int(round(base_units * size_factor))
+    units = int(round(base_units * size_factor * max(0.0, float(leverage))))
     if action.startswith("BUY"):
         side, signed = "buy", units
     elif action.startswith("SELL"):
@@ -45,7 +50,7 @@ def build_order_intent(signal: Any, risk: Any, base_units: int = 1000) -> OrderI
         stop_loss_pct=float(getattr(risk, "stop_loss", 0.0)) if signed else None,
         take_profit_pct=float(getattr(risk, "take_profit", 0.0)) if signed else None,
         rationale=(
-            f"{getattr(risk, 'action', 'NO TRADE')}; "
+            f"{getattr(risk, 'action', 'NO TRADE')} @ {float(leverage):g}x; "
             f"signal={signal.get('signal')}, prob={signal.get('probability')}"
         ),
     )

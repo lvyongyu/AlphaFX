@@ -64,7 +64,10 @@ def step(years: int, leverage: float, base_units: int, refresh: bool) -> dict:
     broker = PaperBroker(db)
 
     closed = broker.update(price, when)
-    intent = build_order_intent(ctx.latest_signal, ctx.risk, base_units=base_units)
+    # The risk engine owns the effective leverage: it is vol-aware and capped
+    # (see RiskAgent), so requesting 20x still trades at the risk-approved size.
+    effective_leverage = float(ctx.risk.leverage)
+    intent = build_order_intent(ctx.latest_signal, ctx.risk, base_units=base_units, leverage=effective_leverage)
     opened = broker.place(intent, price, when)
     open_positions = broker.db.load_open_positions().to_dict(orient="records")
 
@@ -74,6 +77,8 @@ def step(years: int, leverage: float, base_units: int, refresh: bool) -> dict:
         "price": price,
         "signal": ctx.latest_signal["signal"],
         "action": ctx.risk.action,
+        "requested_leverage": leverage,
+        "effective_leverage": effective_leverage,
         "intent": {"side": intent.side, "units": intent.units},
         "opened": opened,
         "closed": closed,
@@ -107,7 +112,11 @@ def main() -> None:
     if result["status"] != "ok":
         print(f"No signal ({result['status']}).")
         return
-    print(f"{result['date']}  price={result['price']:.5f}  {result['signal'].upper()}  action={result['action']}")
+    lev_note = ""
+    if result.get("requested_leverage") and result["requested_leverage"] != result.get("effective_leverage"):
+        lev_note = f"  (requested {result['requested_leverage']:g}x, risk-capped to {result['effective_leverage']:g}x)"
+    print(f"{result['date']}  price={result['price']:.5f}  {result['signal'].upper()}  "
+          f"action={result['action']}  leverage={result.get('effective_leverage', 1):g}x{lev_note}")
     print(f"opened: {result['opened']}")
     if result["closed"]:
         print(f"closed: {result['closed']}")

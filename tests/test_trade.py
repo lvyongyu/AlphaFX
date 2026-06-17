@@ -36,6 +36,16 @@ def test_small_position_size_halves_units():
     assert small.units == 500
 
 
+def test_leverage_scales_traded_units():
+    # Notional scales linearly with leverage, signed by side; Small size still halves.
+    assert build_order_intent(_signal("bullish"), _risk("BUY AUD/USD"), base_units=1000, leverage=5).units == 5000
+    assert build_order_intent(_signal("bearish"), _risk("SELL AUD/USD"), base_units=1000, leverage=20).units == -20000
+    small5x = build_order_intent(_signal("bullish"), _risk("BUY AUD/USD", size="Small"), base_units=1000, leverage=5)
+    assert small5x.units == 2500
+    # NO TRADE stays flat regardless of leverage.
+    assert build_order_intent(_signal("neutral"), _risk("NO TRADE"), base_units=1000, leverage=20).units == 0
+
+
 # ---- paper broker lifecycle ----
 
 def test_paper_open_then_take_profit(tmp_path):
