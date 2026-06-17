@@ -176,13 +176,51 @@ class BacktestAgent:
                 "worst_trade": 0.0,
             }
         returns = trades["realised_return"].dropna()
-        return {
+        metrics = {
             "win_rate": float((returns > 0).mean()) if len(returns) else 0.0,
             "profit_factor": BacktestAgent.profit_factor(returns),
             "number_of_trades": int(len(returns)),
             "average_trade": float(returns.mean()) if len(returns) else 0.0,
             "best_trade": float(returns.max()) if len(returns) else 0.0,
             "worst_trade": float(returns.min()) if len(returns) else 0.0,
+        }
+        metrics.update(BacktestAgent.trade_significance(returns))
+        return metrics
+
+    @staticmethod
+    def trade_significance(returns: pd.Series) -> dict[str, float]:
+        """Small-sample uncertainty on the trade-level edge.
+
+        Trades are non-overlapping (built with i = exit_idx + 1), so trade
+        returns are ~independent and `number_of_trades` IS the effective sample
+        size. With AUD/USD's 20-day holding period a 5-year window yields only
+        ~60 trades, so any Sharpe is noisy — these fields make that explicit:
+
+        - `avg_trade_t_stat`: t-stat that the mean trade return is > 0.
+        - `sharpe_trade`: per-trade Sharpe (mean/std, not annualized).
+        - `sharpe_trade_ci_low/high`: 95% CI via Lo (2002) SE
+          ≈ sqrt((1 + 0.5*SR^2) / n). A CI straddling 0 means the edge is not
+          distinguishable from zero at this sample size.
+        """
+        returns = returns.dropna()
+        n = int(len(returns))
+        std = float(returns.std(ddof=1)) if n > 1 else 0.0
+        if n < 2 or std == 0.0:
+            return {
+                "avg_trade_t_stat": 0.0,
+                "sharpe_trade": 0.0,
+                "sharpe_trade_ci_low": 0.0,
+                "sharpe_trade_ci_high": 0.0,
+            }
+        mean = float(returns.mean())
+        t_stat = mean / (std / np.sqrt(n))
+        sharpe_trade = mean / std
+        se = np.sqrt((1.0 + 0.5 * sharpe_trade**2) / n)
+        return {
+            "avg_trade_t_stat": float(t_stat),
+            "sharpe_trade": float(sharpe_trade),
+            "sharpe_trade_ci_low": float(sharpe_trade - 1.96 * se),
+            "sharpe_trade_ci_high": float(sharpe_trade + 1.96 * se),
         }
 
     @staticmethod
@@ -255,4 +293,8 @@ class BacktestAgent:
             "average_trade": 0.0,
             "best_trade": 0.0,
             "worst_trade": 0.0,
+            "avg_trade_t_stat": 0.0,
+            "sharpe_trade": 0.0,
+            "sharpe_trade_ci_low": 0.0,
+            "sharpe_trade_ci_high": 0.0,
         }

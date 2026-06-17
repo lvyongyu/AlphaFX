@@ -2,9 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   test:
@@ -19,5 +17,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # Optional ML extras (xgboost): installed in CI so the xgboost code
+          # path is exercised, but kept out of core requirements so the app
+          # deploys without it (it falls back to scikit-learn).
+          pip install -r requirements-ml.txt
       - name: Run tests
         run: python -m pytest -q

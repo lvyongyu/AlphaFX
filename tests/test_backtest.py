@@ -113,6 +113,29 @@ def test_swap_carry_signs_by_direction():
     assert long_trades.iloc[0]["realised_return"] > short_trades.iloc[0]["realised_return"]
 
 
+def test_trade_significance_reports_sharpe_confidence_interval():
+    market = sample_market_data()
+    features = FeatureAgent().build_features(market)
+    signals = QuantSignalAgent().generate_signals(features)
+    _, metrics = BacktestAgent().run(market, signals, "2024-02-01", "2024-07-01")
+    assert "sharpe_trade_ci_low" in metrics and "sharpe_trade_ci_high" in metrics
+    # CI is ordered and brackets the point estimate.
+    assert metrics["sharpe_trade_ci_low"] <= metrics["sharpe_trade"] <= metrics["sharpe_trade_ci_high"]
+    assert "avg_trade_t_stat" in metrics
+
+
+def test_trade_significance_empty_is_zeroed():
+    stats = BacktestAgent.trade_significance(pd.Series([], dtype=float))
+    assert stats["sharpe_trade"] == 0.0
+    assert stats["sharpe_trade_ci_low"] == 0.0 and stats["sharpe_trade_ci_high"] == 0.0
+    # A wider CI must come with a smaller sample: more trades tighten the band.
+    few = BacktestAgent.trade_significance(pd.Series([0.02, -0.01, 0.03, -0.02, 0.01]))
+    many = BacktestAgent.trade_significance(pd.Series([0.02, -0.01, 0.03, -0.02, 0.01] * 20))
+    few_width = few["sharpe_trade_ci_high"] - few["sharpe_trade_ci_low"]
+    many_width = many["sharpe_trade_ci_high"] - many["sharpe_trade_ci_low"]
+    assert many_width < few_width
+
+
 def test_broker_swap_markup_reduces_return():
     base = BacktestAgent().build_trades(
         _flat_trade_data("bullish"), holding_period=10, leverage=1.0,

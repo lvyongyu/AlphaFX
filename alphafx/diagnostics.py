@@ -216,6 +216,43 @@ class FactorDiagnosticsAgent:
             )
         return pd.DataFrame(rows).sort_values("feature_importance", ascending=False) if rows else pd.DataFrame()
 
+    def rolling_ic_table(
+        self, features: pd.DataFrame, horizon: int = 20, window: int = 126
+    ) -> pd.DataFrame:
+        """Per-window IC for each scoring factor — exposes whether a factor's
+        direction is stable over time or only worked in one regime.
+
+        The signal hard-codes each factor's sign (e.g. "DXY up -> AUD down"). A
+        factor whose IC flips sign across windows is a warning that its assumed
+        direction is not reliable. Windows are non-overlapping blocks of `window`
+        rows; each row's `information_coefficient` is the correlation of the
+        point-in-time factor with the forward `horizon`-day AUD/USD return inside
+        that block. Long format (factor, window, window_end, IC) so the UI can
+        pivot it into a line/heatmap.
+        """
+        empty = pd.DataFrame(columns=["factor", "window", "window_end", "information_coefficient"])
+        if features.empty:
+            return empty
+        df = features.assign(date=pd.to_datetime(features["date"])).sort_values("date").reset_index(drop=True)
+        df["future_return"] = df["audusd_return_20d"].shift(-horizon)
+        cols = {raw: label for _score_col, (raw, label) in self.scoring_features.items() if raw in df.columns}
+        rows: list[dict[str, object]] = []
+        for raw, label in cols.items():
+            pair = df[[raw, "future_return", "date"]].dropna().reset_index(drop=True)
+            for window_no, start in enumerate(range(0, len(pair) - window + 1, window), start=1):
+                block = pair.iloc[start : start + window]
+                corr = block[raw].corr(block["future_return"])
+                if pd.notna(corr):
+                    rows.append(
+                        {
+                            "factor": label,
+                            "window": window_no,
+                            "window_end": block["date"].iloc[-1],
+                            "information_coefficient": float(corr),
+                        }
+                    )
+        return pd.DataFrame(rows) if rows else empty
+
     def factor_correlation(self, features: pd.DataFrame) -> pd.DataFrame:
         """Correlation matrix among the five scoring features.
 

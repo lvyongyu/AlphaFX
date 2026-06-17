@@ -26,7 +26,13 @@ def _score_negative(value: float | None) -> int | float:
     return 0
 
 class QuantSignalAgent:
-    probability_map = {5: 0.70, 4: 0.65, 3: 0.60, 2: 0.55, 1: 0.52, 0: 0.50, -1: 0.48, -2: 0.45, -3: 0.40, -4: 0.35, -5: 0.30}
+    # `probability` is the confidence that the SIGNAL DIRECTION is correct
+    # (P(signal right)), NOT P(up). Keyed by |score| so a strong bearish signal
+    # maps to a HIGH probability, exactly like the calibrated hit rate from
+    # SignalDiagnosticsAgent. Keeping both producers on one convention lets the
+    # fallback and calibrated probabilities be used interchangeably and lets
+    # RiskAgent gate both directions on a single directional-confidence threshold.
+    probability_map = {0: 0.50, 1: 0.52, 2: 0.55, 3: 0.60, 4: 0.65, 5: 0.70}
 
     def __init__(self, db: Database | None = None) -> None:
         self.db = db or Database()
@@ -118,8 +124,8 @@ class QuantSignalAgent:
     def map_probability(cls, score: float) -> float:
         if pd.isna(score):
             return 0.50
-        rounded = int(max(-5, min(5, round(score))))
-        return cls.probability_map[rounded]
+        magnitude = int(min(5, abs(round(score))))
+        return cls.probability_map[magnitude]
 
     @staticmethod
     def map_confidence(score: float, available_factors: int) -> str:

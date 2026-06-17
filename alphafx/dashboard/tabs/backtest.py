@@ -69,6 +69,23 @@ def render(ctx: ResearchContext) -> None:
             st.subheader("Rolling Sharpe (63d)")
             st.line_chart(rolling_sharpe.dropna())
 
+        n_trades = int(metrics.get("number_of_trades", 0))
+        sharpe_trade = metrics.get("sharpe_trade", 0.0)
+        ci_low = metrics.get("sharpe_trade_ci_low", 0.0)
+        ci_high = metrics.get("sharpe_trade_ci_high", 0.0)
+        t_stat = metrics.get("avg_trade_t_stat", 0.0)
+        st.metric("Per-trade Sharpe (95% CI)", f"{sharpe_trade:.2f}  [{ci_low:.2f}, {ci_high:.2f}]")
+        straddles_zero = ci_low <= 0.0 <= ci_high
+        st.caption(
+            f"Based on {n_trades} non-overlapping trades (independent observations). "
+            f"Mean-trade t-stat {t_stat:.2f}. "
+            + (
+                "The CI straddles 0 — at this sample size the edge is **not** distinguishable from zero."
+                if straddles_zero
+                else "The CI excludes 0, but small samples still warrant caution."
+            )
+        )
+
         st.dataframe(pd.DataFrame([metrics]), use_container_width=True)
         if hasattr(backtest_agent, "last_trades") and not backtest_agent.last_trades.empty:
             st.subheader("Trade List")

@@ -1,0 +1,5 @@
+# Optional ML extras. The ML research layer (alphafx/ml/) prefers XGBoost but
+# falls back to a scikit-learn logistic regression when it is not installed, so
+# the app stays deployable without this file. Install with:
+#   pip install -r requirements.txt -r requirements-ml.txt
+xgboost>=2.0

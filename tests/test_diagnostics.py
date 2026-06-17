@@ -61,6 +61,16 @@ def test_factor_correlation_matrix_exposes_dxy_vix_overlap():
     assert abs(float(corr.loc["DXY trend", "VIX"]) - float(corr.loc["VIX", "DXY trend"])) < 1e-9
 
 
+def test_rolling_ic_table_exposes_per_window_ic():
+    features = FeatureAgent().build_features(sample_market_data())
+    table = FactorDiagnosticsAgent().rolling_ic_table(features, horizon=20, window=40)
+    assert not table.empty
+    assert set(["factor", "window", "window_end", "information_coefficient"]).issubset(table.columns)
+    # ICs are valid correlations and each factor spans multiple windows.
+    assert table["information_coefficient"].between(-1.0, 1.0).all()
+    assert table.groupby("factor")["window"].max().max() >= 2
+
+
 def test_calibration_frame_is_backward_looking():
     # Perturbing only the LAST trading days must not change the calibrated
     # probability for early dates — proving calibration_frame has no future leak.
