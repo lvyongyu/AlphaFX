@@ -175,10 +175,37 @@ python scripts/paper_trade.py --json     # machine-readable output
 python scripts/paper_trade.py --export   # write data/ snapshots for committing
 ```
 
-A scheduled GitHub Actions workflow (`.github/workflows/daily.yml`) runs this
-step on weekdays and commits the resulting snapshots. Connecting to broker
-**demo** accounts and, later, live execution behind manual approval are tracked
-in the [Roadmap](ROADMAP.md).
+Position size scales with the risk-approved leverage (vol-aware, capped at 5x by
+`RiskAgent`): traded notional = `base_units × size_factor × leverage`, so the
+paper PnL reflects leverage directly.
+
+### Leverage risk demo
+
+`scripts/leverage_sim.py` replays a Monte-Carlo of synthetic AUD/USD paths
+through the real `PaperBroker` at a ladder of leverages — deliberately above the
+5x cap — to show how leverage amplifies losses for the *same* signal and stops:
+
+```bash
+python scripts/leverage_sim.py 1 5 20 50
+```
+
+```text
+  lev  median_ret   p05_ret  med_maxDD  worst_trade  blow_up_rate
+    1       -1.4%    -36.1%     -20.9%        -6.8%            0%
+    5      -14.0%   -100.0%     -75.7%       -34.1%           33%
+   20     -100.0%   -100.0%    -107.4%      -110.7%           79%
+   50     -100.0%   -100.0%    -116.2%      -276.8%           91%
+```
+
+Leverage does not change the win rate — it multiplies the drawdown and the
+left tail. Even at the 5x cap, a marginal signal is liquidated on ~1/3 of paths;
+at 20x the account is wiped on ~80%. (Synthetic paths, no market-data network in
+this environment — illustrative of the leverage effect, not a strategy backtest.)
+
+A scheduled GitHub Actions workflow (`.github/workflows/daily.yml`) runs the
+paper-trading step on weekdays and commits the resulting snapshots. Connecting to
+broker **demo** accounts and, later, live execution behind manual approval are
+tracked in the [Roadmap](ROADMAP.md).
 
 ## Project Layout
 
