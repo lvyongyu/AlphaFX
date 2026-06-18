@@ -1,8 +1,8 @@
 {
   "status": "ok",
-  "date": "2026-06-16 00:00:00",
-  "price": 0.7073001265525818,
-  "signal": "neutral",
+  "date": "2026-06-17 00:00:00",
+  "price": 0.7065500020980835,
+  "signal": "bearish",
   "action": "NO TRADE",
   "intent": {
     "side": "none",
