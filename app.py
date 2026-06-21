@@ -17,6 +17,7 @@ from alphafx.dashboard.tabs import (  # noqa: E402
     hero,
     journal,
     ml,
+    portfolio,
     positions,
     validation,
 )
@@ -62,6 +63,10 @@ for _warning in ctx.warnings:
 
 # The answer first — today's call, the factors behind it, plain English.
 hero.render(ctx)
+
+# Portfolio-level daily summary: today's call across every traded pair (AUD/EUR/CHF).
+st.subheader("📋  Portfolio summary")
+portfolio.render(ctx)
 
 # Everything else is opt-in detail, collapsed by default.
 with st.expander("📈  Price chart & data"):
