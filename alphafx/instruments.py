@@ -64,6 +64,12 @@ INSTRUMENTS: dict[str, InstrumentConfig] = {
 
 DEFAULT_INSTRUMENT = "AUDUSD"
 
+# The live trading portfolio: the pairs with a genuine positive risk-adjusted edge
+# (5y Sharpe AUD +0.18 / EUR +0.12 / CHF +0.30), weakly correlated (~0.2), which
+# together lift Sharpe vs AUD-only and roughly halve drawdown. Single source of
+# truth for both the headless paper trade and the dashboard summary.
+LIVE_PORTFOLIO = ["AUDUSD", "EURUSD", "USDCHF"]
+
 
 def get_instrument(name: str | None) -> InstrumentConfig:
     """Resolve an instrument by canonical name, defaulting to the AUD/USD baseline."""

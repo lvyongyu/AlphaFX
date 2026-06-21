@@ -25,14 +25,12 @@ from alphafx.collect import DataAgent  # noqa: E402
 from alphafx.config import DEFAULT_SYMBOLS, load_local_env  # noqa: E402
 from alphafx.dashboard.context import build_context  # noqa: E402
 from alphafx.database import Database  # noqa: E402
-from alphafx.instruments import get_instrument  # noqa: E402
+from alphafx.instruments import LIVE_PORTFOLIO, get_instrument  # noqa: E402
 from alphafx.trade.order import build_order_intent  # noqa: E402
 from alphafx.trade.paper import PaperBroker  # noqa: E402
 
-# Live portfolio: the pairs with a genuine positive risk-adjusted edge (5y Sharpe
-# AUD +0.18 / EUR +0.12 / CHF +0.30). Weakly correlated (~0.2), so this trio lifts
-# Sharpe vs AUD-only and roughly halves drawdown. See alphafx-multi-instrument memo.
-DEFAULT_PORTFOLIO = ["AUDUSD", "EURUSD", "USDCHF"]
+# Single source of truth in alphafx.instruments (shared with the dashboard).
+DEFAULT_PORTFOLIO = LIVE_PORTFOLIO
 
 
 def export_snapshot(result: dict, db: Database, out_dir: str = "data") -> list[str]:
