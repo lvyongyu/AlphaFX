@@ -44,6 +44,7 @@ class RiskAgent:
         max_risk_per_trade: float = 0.01,
         probability_source: str = "historical_calibration",
         min_confidence: float | None = None,
+        instrument: str = "AUD/USD",
     ) -> RiskSuggestion:
         min_confidence = self.MIN_CONFIDENCE if min_confidence is None else float(min_confidence)
         leverage = min(max(float(user_leverage), 1.0), 5.0)
@@ -61,9 +62,9 @@ class RiskAgent:
         # same >= threshold gates both directions — a confident bearish signal
         # has a HIGH probability, not a low one.
         elif has_evidence and signal == "bullish" and probability >= min_confidence:
-            action = "BUY AUD/USD"
+            action = f"BUY {instrument}"
         elif has_evidence and signal == "bearish" and probability >= min_confidence:
-            action = "SELL AUD/USD"
+            action = f"SELL {instrument}"
         else:
             action = "NO TRADE"
             leverage = 1.0

@@ -207,6 +207,7 @@ def build_context(
         volatility=latest_feature.get("audusd_vol_20d"),
         user_leverage=leverage,
         probability_source=latest_signal.get("probability_source", "fallback_score_map"),
+        instrument=cfg.label,
     )
 
     # The LLM only runs here, on the latest signal — never inside the Backtest,
