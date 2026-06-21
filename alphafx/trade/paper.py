@@ -49,16 +49,23 @@ class PaperBroker:
         )
         return {"status": "opened", "id": position_id, "units": int(intent.units), "entry_price": float(price)}
 
-    def update(self, price: float, when: str, max_holding_days: int | None = None) -> list[dict[str, Any]]:
+    def update(
+        self, price: float, when: str, max_holding_days: int | None = None, instrument: str | None = None
+    ) -> list[dict[str, Any]]:
         """Mark open positions to market; auto-close on the triple barrier.
 
         Time barrier (primary): close once a position has been held for
         `max_holding_days` business days (defaults to MAX_HOLDING_DAYS). Horizontal
         barriers (stop-loss / take-profit) close earlier if hit.
+
+        `price` marks the given `instrument` only — in a multi-instrument book each
+        pair must be marked with its OWN price, so pass `instrument` to avoid
+        closing another pair's position against the wrong price. Default (None)
+        marks every open position, correct for a single-instrument book.
         """
         max_holding_days = self.MAX_HOLDING_DAYS if max_holding_days is None else max_holding_days
         closed: list[dict[str, Any]] = []
-        for pos in self.db.load_open_positions().itertuples():
+        for pos in self.db.load_open_positions(instrument).itertuples():
             reason = self._exit_reason(pos, price)
             if reason is None and max_holding_days is not None:
                 if self._holding_days(pos.entry_date, when) >= max_holding_days:
@@ -101,8 +108,8 @@ class PaperBroker:
                 return "stop_loss"
         return None
 
-    def unrealised(self, price: float) -> float:
-        positions = self.db.load_open_positions()
+    def unrealised(self, price: float, instrument: str | None = None) -> float:
+        positions = self.db.load_open_positions(instrument)
         if positions.empty:
             return 0.0
         return float((positions["units"] * (float(price) - positions["entry_price"])).sum())
