@@ -68,6 +68,7 @@ class QuantSignalAgent:
         horizon: int = 20,
         window: int = 252,
         min_obs: int = 60,
+        instrument: "InstrumentConfig | str | None" = None,
     ) -> pd.DataFrame:
         """Point-in-time per-factor sign (+1 keep / -1 flip) from the trailing IC.
 
@@ -82,11 +83,12 @@ class QuantSignalAgent:
         sign is learned only from the past, never from full-sample IC, so it does
         not overfit the way a global sign-flip would.
         """
-        from .config import DEFAULT_SYMBOLS
+        from .instruments import InstrumentConfig, get_instrument
 
+        cfg = instrument if isinstance(instrument, InstrumentConfig) else get_instrument(instrument)
         votes = self._factor_votes(features).assign(date=lambda x: pd.to_datetime(x["date"]))
         aud = (
-            market_data[market_data["symbol"] == DEFAULT_SYMBOLS.audusd]
+            market_data[market_data["symbol"] == cfg.fx_symbol]
             .assign(date=lambda x: pd.to_datetime(x["date"]))
             .sort_values("date")[["date", "close"]]
         )
@@ -108,6 +110,7 @@ class QuantSignalAgent:
         weights: dict[str, float] | None = None,
         factor_signs: pd.DataFrame | None = None,
         persist: bool = True,
+        instrument: "InstrumentConfig | str | None" = None,
     ) -> pd.DataFrame:
         # `weights` is an OPTIONAL, experimental factor weighting. Default (None)
         # keeps the equal-weight rule signal unchanged — equal weight is robust and
@@ -172,7 +175,10 @@ class QuantSignalAgent:
             out = out.drop(columns=["calibrated_probability"])
         out["confidence"] = out.apply(lambda row: self.map_confidence(row["score"], row[score_cols].notna().sum()), axis=1)
         if persist:
-            self.db.save_signals(out)
+            from .instruments import InstrumentConfig, get_instrument
+
+            cfg = instrument if isinstance(instrument, InstrumentConfig) else get_instrument(instrument)
+            self.db.save_signals(out, instrument=cfg.name)
         return out
 
     def latest_signal(self, signals: pd.DataFrame) -> pd.Series:

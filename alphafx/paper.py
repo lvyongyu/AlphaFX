@@ -20,13 +20,15 @@ class PaperJournalAgent:
         risk: RiskSuggestion,
         explanation: str,
         audusd_price: float | None = None,
+        instrument: str = "AUDUSD",
     ) -> None:
         if latest_signal.empty:
             return
         date_value = pd.to_datetime(latest_signal["date"]).strftime("%Y-%m-%d")
         row = {
             "date": date_value,
-            "audusd_price": audusd_price,
+            "instrument": instrument,
+            "price": audusd_price,
             "signal": latest_signal.get("signal"),
             "score": latest_signal.get("score"),
             "calibrated_probability": latest_signal.get("probability"),

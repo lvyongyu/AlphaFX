@@ -37,16 +37,19 @@ from alphafx.trade.order import build_order_intent  # noqa: E402
 from alphafx.trade.paper import PaperBroker  # noqa: E402
 
 
-def replay(days: int, leverage: float, base_units: int, years: int, refresh: bool) -> dict:
+def replay(days: int, leverage: float, base_units: int, years: int, refresh: bool, instrument: str = "AUDUSD") -> dict:
+    from alphafx.instruments import get_instrument
+
+    cfg = get_instrument(instrument)
     db = Database()
     end = date.today()
     start = end - timedelta(days=365 * years)
-    ctx = build_context(start, end, leverage, use_llm=False, refresh=refresh, db=db)
+    ctx = build_context(start, end, leverage, use_llm=False, refresh=refresh, db=db, instrument=cfg.name)
     if ctx.status != "ok":
         return {"status": ctx.status}
 
     aud = (
-        ctx.market_data[ctx.market_data["symbol"] == DEFAULT_SYMBOLS.audusd]
+        ctx.market_data[ctx.market_data["symbol"] == cfg.fx_symbol]
         .assign(date=lambda x: pd.to_datetime(x["date"]))
         .sort_values("date")[["date", "close"]]
     )
@@ -77,7 +80,8 @@ def replay(days: int, leverage: float, base_units: int, years: int, refresh: boo
             probability_source=getattr(row, "probability_source", "fallback_score_map"),
         )
         intent = build_order_intent(
-            {"signal": row.signal, "probability": float(row.probability)}, rk, base_units=base_units
+            {"signal": row.signal, "probability": float(row.probability)}, rk, base_units=base_units,
+            instrument=cfg.oanda,
         )
         opened = broker.place(intent, price, when)
         realised = broker.realised()
@@ -139,17 +143,18 @@ def main() -> None:
     parser.add_argument("--leverage", type=float, default=2.0)
     parser.add_argument("--base-units", type=int, default=1000)
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--instrument", default="AUDUSD", help="canonical instrument name (e.g. EURUSD)")
     parser.add_argument("--out-dir", default="data")
     args = parser.parse_args()
 
-    result = replay(args.days, args.leverage, args.base_units, args.years, args.refresh)
+    result = replay(args.days, args.leverage, args.base_units, args.years, args.refresh, instrument=args.instrument)
     if result["status"] != "ok":
         print(f"Replay produced no result: {result['status']}")
         return
 
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    tag = f"{args.days}d"
+    tag = f"{args.days}d" if args.instrument == "AUDUSD" else f"{args.instrument}_{args.days}d"
     hist_path = out / f"paper_replay_{tag}_history.csv"
     trades_path = out / f"paper_replay_{tag}_trades.csv"
     result["history"].to_csv(hist_path, index=False)

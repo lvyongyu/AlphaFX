@@ -20,8 +20,8 @@ from alphafx.agents import (
     SignalDiagnosticsAgent,
     WalkForwardAgent,
 )
-from alphafx.config import DEFAULT_SYMBOLS
 from alphafx.database import Database
+from alphafx.instruments import get_instrument
 from alphafx.llm import LLMContrarianAgent, LLMExplanationAgent, LLMJudgeAgent
 from alphafx.ml import MLSignalAgent
 
@@ -71,6 +71,7 @@ class ResearchContext:
     ml_signals: pd.DataFrame = field(default_factory=pd.DataFrame)
     ml_latest_signal: str | None = None
     aud_latest: float | None = None
+    instrument: str = "AUDUSD"
     warnings: list[str] = field(default_factory=list)
 
 
@@ -116,6 +117,7 @@ def build_context(
     db: Database | None = None,
     compute_features: Any = None,
     compute_ml: Any = None,
+    instrument: str = "AUDUSD",
 ) -> ResearchContext:
     """Load data and compute the full research context. Streamlit-free.
 
@@ -124,6 +126,7 @@ def build_context(
     `refresh` is the only network call; the caller owns the spinner around it.
     """
     db = db or Database()
+    cfg = get_instrument(instrument)
     data_agent = DataAgent(db=db)
     feature_agent = FeatureAgent(db=db)
     signal_agent = QuantSignalAgent(db=db)
@@ -155,21 +158,21 @@ def build_context(
     # The DB holds whatever has ever been downloaded; restrict the analysis to the
     # requested [start, end] window so the calibration/backtest window is actually
     # controlled by start/end (and not silently the entire DB).
-    market_data = _clip_dates(data_agent.load_market_data(), start, end)
+    market_data = _clip_dates(data_agent.load_market_data(cfg), start, end)
     if market_data.empty:
-        return ResearchContext(status=NO_DATA, start=start, end=end, leverage=leverage, use_llm=use_llm, **agents)
+        return ResearchContext(status=NO_DATA, start=start, end=end, leverage=leverage, use_llm=use_llm, instrument=cfg.name, **agents)
 
-    macro_data = _clip_dates(data_agent.load_macro_data(), start, end)
+    macro_data = _clip_dates(data_agent.load_macro_data(cfg), start, end)
     if compute_features is not None:
         features = compute_features(market_data, macro_data)
     else:
-        features = feature_agent.build_features(market_data, macro_data=macro_data)
+        features = feature_agent.build_features(market_data, macro_data=macro_data, instrument=cfg)
     # Walk-forward adaptive factor signs: flip any factor whose assumed direction
     # has been anti-predictive in the trailing window (point-in-time, no look-ahead).
-    factor_signs = signal_agent.adaptive_factor_signs(features, market_data, horizon=20)
-    raw_signals = signal_agent.generate_signals(features, factor_signs=factor_signs)
+    factor_signs = signal_agent.adaptive_factor_signs(features, market_data, horizon=20, instrument=cfg)
+    raw_signals = signal_agent.generate_signals(features, factor_signs=factor_signs, instrument=cfg)
     calibration = diagnostics_agent.calibration_frame(market_data, raw_signals, horizon=20, min_samples=20)
-    signals = signal_agent.generate_signals(features, calibration=calibration, factor_signs=factor_signs)
+    signals = signal_agent.generate_signals(features, calibration=calibration, factor_signs=factor_signs, instrument=cfg)
 
     # Surface a degraded model loudly instead of silently running on fewer factors.
     data_warnings: list[str] = []
@@ -192,6 +195,7 @@ def build_context(
             market_data=market_data,
             macro_data=macro_data,
             features=features,
+            instrument=cfg.name,
             warnings=data_warnings,
             **agents,
         )
@@ -203,6 +207,7 @@ def build_context(
         volatility=latest_feature.get("audusd_vol_20d"),
         user_leverage=leverage,
         probability_source=latest_signal.get("probability_source", "fallback_score_map"),
+        instrument=cfg.label,
     )
 
     # The LLM only runs here, on the latest signal — never inside the Backtest,
@@ -218,10 +223,11 @@ def build_context(
         judgement = JudgeAgent().judge(latest_signal, risk, explanation, contrarian)
 
     aud_latest = float(
-        market_data[market_data["symbol"] == DEFAULT_SYMBOLS.audusd].sort_values("date").iloc[-1]["close"]
+        market_data[market_data["symbol"] == cfg.fx_symbol].sort_values("date").iloc[-1]["close"]
     )
     paper_journal_agent.record_signal(
-        latest_feature, latest_signal, factor_table, risk, judgement["explanation"], audusd_price=aud_latest
+        latest_feature, latest_signal, factor_table, risk, judgement["explanation"],
+        audusd_price=aud_latest, instrument=cfg.name,
     )
 
     # ML research comparison — computed once, reused by the AI Report and ML tabs.
@@ -259,6 +265,7 @@ def build_context(
         ml_signals=ml_signals,
         ml_latest_signal=ml_latest_signal,
         aud_latest=aud_latest,
+        instrument=cfg.name,
         warnings=data_warnings,
         **agents,
     )

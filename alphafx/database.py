@@ -25,33 +25,38 @@ CREATE TABLE IF NOT EXISTS market_data (
 
 CREATE TABLE IF NOT EXISTS features (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL UNIQUE,
-    audusd_return_20d REAL,
-    audusd_return_60d REAL,
-    audusd_vol_20d REAL,
+    date TEXT NOT NULL,
+    instrument TEXT NOT NULL DEFAULT 'AUDUSD',
+    target_return_20d REAL,
+    target_return_60d REAL,
+    target_vol_20d REAL,
     dxy_return_20d REAL,
     dxy_return_60d REAL,
     vix_level REAL,
     vix_change_20d REAL,
     yield_spread REAL,
     yield_spread_change_20d REAL,
-    ironore_return_20d REAL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    commodity_return_20d REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(date, instrument)
 );
 
 CREATE TABLE IF NOT EXISTS signals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL UNIQUE,
+    date TEXT NOT NULL,
+    instrument TEXT NOT NULL DEFAULT 'AUDUSD',
     signal TEXT,
     probability REAL,
+    probability_source TEXT,
     confidence TEXT,
     score REAL,
-    aud_momentum_score REAL,
+    momentum_score REAL,
     dxy_score REAL,
     yield_score REAL,
-    ironore_score REAL,
+    commodity_score REAL,
     vix_score REAL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(date, instrument)
 );
 
 CREATE TABLE IF NOT EXISTS macro_data (
@@ -67,8 +72,9 @@ CREATE TABLE IF NOT EXISTS macro_data (
 
 CREATE TABLE IF NOT EXISTS paper_journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL UNIQUE,
-    audusd_price REAL,
+    date TEXT NOT NULL,
+    instrument TEXT NOT NULL DEFAULT 'AUDUSD',
+    price REAL,
     signal TEXT,
     score REAL,
     calibrated_probability REAL,
@@ -82,7 +88,8 @@ CREATE TABLE IF NOT EXISTS paper_journal (
     exit_price REAL,
     realised_pnl REAL,
     status TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(date, instrument)
 );
 
 CREATE TABLE IF NOT EXISTS backtest_runs (
@@ -150,6 +157,61 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 """
 
 
+# In-memory DataFrame columns keep their historical AUD-flavoured names (they
+# semantically mean "target / commodity / momentum"); the multi-instrument DB
+# uses generic names. These maps translate at the save/load boundary only, so
+# the feature/signal compute code stays untouched.
+_FEATURE_DB_FROM_MEM = {
+    "audusd_return_20d": "target_return_20d",
+    "audusd_return_60d": "target_return_60d",
+    "audusd_vol_20d": "target_vol_20d",
+    "dxy_return_20d": "dxy_return_20d",
+    "dxy_return_60d": "dxy_return_60d",
+    "vix_level": "vix_level",
+    "vix_change_20d": "vix_change_20d",
+    "yield_spread": "yield_spread",
+    "yield_spread_change_20d": "yield_spread_change_20d",
+    "ironore_return_20d": "commodity_return_20d",
+}
+_SIGNAL_DB_FROM_MEM = {
+    "aud_momentum_score": "momentum_score",
+    "dxy_score": "dxy_score",
+    "yield_score": "yield_score",
+    "ironore_score": "commodity_score",
+    "vix_score": "vix_score",
+}
+
+# One-time migration: old single-instrument tables (UNIQUE(date), audusd_* cols)
+# -> new (date, instrument)-keyed tables with generic columns. Existing rows are
+# stamped instrument='AUDUSD'. `marker` is a column present ONLY in the old
+# schema; (old_select, new_insert) map old column order to new.
+_MI_MIGRATIONS = {
+    "features": (
+        "audusd_return_20d",
+        "date, 'AUDUSD', audusd_return_20d, audusd_return_60d, audusd_vol_20d, dxy_return_20d, "
+        "dxy_return_60d, vix_level, vix_change_20d, yield_spread, yield_spread_change_20d, ironore_return_20d",
+        "date, instrument, target_return_20d, target_return_60d, target_vol_20d, dxy_return_20d, "
+        "dxy_return_60d, vix_level, vix_change_20d, yield_spread, yield_spread_change_20d, commodity_return_20d",
+    ),
+    "signals": (
+        "aud_momentum_score",
+        "date, 'AUDUSD', signal, probability, confidence, score, aud_momentum_score, dxy_score, "
+        "yield_score, ironore_score, vix_score",
+        "date, instrument, signal, probability, confidence, score, momentum_score, dxy_score, "
+        "yield_score, commodity_score, vix_score",
+    ),
+    "paper_journal": (
+        "audusd_price",
+        "date, 'AUDUSD', audusd_price, signal, score, calibrated_probability, factor_values, "
+        "factor_contributions, recommended_position, stop_loss, take_profit, explanation, "
+        "entry_price, exit_price, realised_pnl, status",
+        "date, instrument, price, signal, score, calibrated_probability, factor_values, "
+        "factor_contributions, recommended_position, stop_loss, take_profit, explanation, "
+        "entry_price, exit_price, realised_pnl, status",
+    ),
+}
+
+
 class Database:
     def __init__(self, path: Path | None = None) -> None:
         # Resolve the default at call time (not at def time) so tests can redirect
@@ -161,9 +223,24 @@ class Database:
     def connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
 
+    @staticmethod
+    def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
+        return [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+
     def init_schema(self) -> None:
         with self.connect() as conn:
+            # Rename any old single-instrument tables aside BEFORE the schema runs,
+            # so CREATE TABLE builds the new shape, then copy old rows back in.
+            for table, (marker, _old_sel, _new_ins) in _MI_MIGRATIONS.items():
+                cols = self._columns(conn, table)
+                if cols and marker in cols and "instrument" not in cols:
+                    conn.execute(f"ALTER TABLE {table} RENAME TO {table}__mi_old")
             conn.executescript(SCHEMA)
+            for table, (_marker, old_sel, new_ins) in _MI_MIGRATIONS.items():
+                if self._columns(conn, f"{table}__mi_old"):
+                    conn.execute(f"INSERT INTO {table} ({new_ins}) SELECT {old_sel} FROM {table}__mi_old")
+                    conn.execute(f"DROP TABLE {table}__mi_old")
+            conn.commit()
 
     def upsert_market_data(self, frame: pd.DataFrame) -> None:
         if frame.empty:
@@ -231,7 +308,8 @@ class Database:
     def upsert_paper_journal(self, row: dict[str, object]) -> None:
         columns = [
             "date",
-            "audusd_price",
+            "instrument",
+            "price",
             "signal",
             "score",
             "calibrated_probability",
@@ -246,12 +324,16 @@ class Database:
             "realised_pnl",
             "status",
         ]
+        row = dict(row)
+        row.setdefault("instrument", "AUDUSD")
+        # Accept the legacy `audusd_price` key as well as the new generic `price`.
+        row.setdefault("price", row.get("audusd_price"))
         values = [row.get(column) for column in columns]
         sql = f"""
         INSERT INTO paper_journal ({", ".join(columns)})
         VALUES ({", ".join("?" for _ in columns)})
-        ON CONFLICT(date) DO UPDATE SET
-            audusd_price = excluded.audusd_price,
+        ON CONFLICT(date, instrument) DO UPDATE SET
+            price = excluded.price,
             signal = excluded.signal,
             score = excluded.score,
             calibrated_probability = excluded.calibrated_probability,
@@ -343,72 +425,44 @@ class Database:
         with self.connect() as conn:
             return pd.read_sql_query("SELECT * FROM paper_positions ORDER BY id", conn)
 
-    def save_features(self, features: pd.DataFrame) -> None:
+    def save_features(self, features: pd.DataFrame, instrument: str = "AUDUSD") -> None:
         if features.empty:
             return
-        columns = [
-            "date",
-            "audusd_return_20d",
-            "audusd_return_60d",
-            "audusd_vol_20d",
-            "dxy_return_20d",
-            "dxy_return_60d",
-            "vix_level",
-            "vix_change_20d",
-            "yield_spread",
-            "yield_spread_change_20d",
-            "ironore_return_20d",
-        ]
+        mem_cols = [c for c in _FEATURE_DB_FROM_MEM if c in features.columns]
+        db_cols = ["date", "instrument"] + [_FEATURE_DB_FROM_MEM[c] for c in mem_cols]
+        updates = ",\n            ".join(f"{c} = excluded.{c}" for c in db_cols if c not in ("date", "instrument"))
         sql = f"""
-        INSERT INTO features ({", ".join(columns)})
-        VALUES ({", ".join("?" for _ in columns)})
-        ON CONFLICT(date) DO UPDATE SET
-            audusd_return_20d = excluded.audusd_return_20d,
-            audusd_return_60d = excluded.audusd_return_60d,
-            audusd_vol_20d = excluded.audusd_vol_20d,
-            dxy_return_20d = excluded.dxy_return_20d,
-            dxy_return_60d = excluded.dxy_return_60d,
-            vix_level = excluded.vix_level,
-            vix_change_20d = excluded.vix_change_20d,
-            yield_spread = excluded.yield_spread,
-            yield_spread_change_20d = excluded.yield_spread_change_20d,
-            ironore_return_20d = excluded.ironore_return_20d
+        INSERT INTO features ({", ".join(db_cols)})
+        VALUES ({", ".join("?" for _ in db_cols)})
+        ON CONFLICT(date, instrument) DO UPDATE SET
+            {updates}
         """
         out = features.copy()
         out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+        out["instrument"] = instrument
+        payload = out[["date", "instrument"] + mem_cols]
         with self.connect() as conn:
-            conn.executemany(sql, out[columns].where(pd.notna(out[columns]), None).to_records(index=False))
+            conn.executemany(sql, payload.where(pd.notna(payload), None).to_records(index=False))
 
-    def save_signals(self, signals: pd.DataFrame) -> None:
+    def save_signals(self, signals: pd.DataFrame, instrument: str = "AUDUSD") -> None:
         if signals.empty:
             return
-        columns = [
-            "date",
-            "signal",
-            "probability",
-            "confidence",
-            "score",
-            "aud_momentum_score",
-            "dxy_score",
-            "yield_score",
-            "ironore_score",
-            "vix_score",
-        ]
+        score_cols = [c for c in _SIGNAL_DB_FROM_MEM if c in signals.columns]
+        base = ["date", "instrument", "signal", "probability", "probability_source", "confidence", "score"]
+        db_cols = base + [_SIGNAL_DB_FROM_MEM[c] for c in score_cols]
+        updates = ",\n            ".join(f"{c} = excluded.{c}" for c in db_cols if c not in ("date", "instrument"))
         sql = f"""
-        INSERT INTO signals ({", ".join(columns)})
-        VALUES ({", ".join("?" for _ in columns)})
-        ON CONFLICT(date) DO UPDATE SET
-            signal = excluded.signal,
-            probability = excluded.probability,
-            confidence = excluded.confidence,
-            score = excluded.score,
-            aud_momentum_score = excluded.aud_momentum_score,
-            dxy_score = excluded.dxy_score,
-            yield_score = excluded.yield_score,
-            ironore_score = excluded.ironore_score,
-            vix_score = excluded.vix_score
+        INSERT INTO signals ({", ".join(db_cols)})
+        VALUES ({", ".join("?" for _ in db_cols)})
+        ON CONFLICT(date, instrument) DO UPDATE SET
+            {updates}
         """
         out = signals.copy()
         out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+        out["instrument"] = instrument
+        for col in ["probability_source", "confidence"]:
+            if col not in out.columns:
+                out[col] = None
+        payload = out[base[:1] + ["instrument"] + base[2:] + score_cols]
         with self.connect() as conn:
-            conn.executemany(sql, out[columns].where(pd.notna(out[columns]), None).to_records(index=False))
+            conn.executemany(sql, payload.where(pd.notna(payload), None).to_records(index=False))

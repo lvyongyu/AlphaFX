@@ -5,6 +5,7 @@ import pandas as pd
 
 from .config import DEFAULT_SYMBOLS
 from .database import Database
+from .instruments import InstrumentConfig, get_instrument
 
 
 class FeatureAgent:
@@ -24,7 +25,14 @@ class FeatureAgent:
         au2y: pd.DataFrame | None = None,
         us2y: pd.DataFrame | None = None,
         iron_ore: pd.DataFrame | None = None,
+        instrument: InstrumentConfig | str | None = None,
     ) -> pd.DataFrame:
+        # The in-memory column names (audusd_*, ironore_*) are kept for historical
+        # continuity but mean "target pair" / "pair commodity"; `instrument` selects
+        # which pair's price and which macro series feed them. `au2y`/`iron_ore`
+        # explicit overrides act as the foreign-yield / commodity series (the
+        # original AUD/USD test signatures stay valid).
+        cfg = instrument if isinstance(instrument, InstrumentConfig) else get_instrument(instrument)
         if market_data.empty:
             return pd.DataFrame()
         wide = (
@@ -34,7 +42,7 @@ class FeatureAgent:
             .ffill()
         )
         features = pd.DataFrame(index=wide.index)
-        aud = wide.get(DEFAULT_SYMBOLS.audusd)
+        aud = wide.get(cfg.fx_symbol)
         dxy = wide.get(DEFAULT_SYMBOLS.dxy)
         vix = wide.get(DEFAULT_SYMBOLS.vix)
 
@@ -47,9 +55,11 @@ class FeatureAgent:
         features["vix_change_20d"] = vix.diff(20) if vix is not None else np.nan
 
         if macro_data is not None and not macro_data.empty:
-            au2y = au2y if au2y is not None else self._macro_symbol_frame(macro_data, "AU2Y")
+            if au2y is None and cfg.foreign_yield:
+                au2y = self._macro_symbol_frame(macro_data, cfg.foreign_yield)
             us2y = us2y if us2y is not None else self._macro_symbol_frame(macro_data, "US2Y")
-            iron_ore = iron_ore if iron_ore is not None else self._macro_symbol_frame(macro_data, "IRON_ORE")
+            if iron_ore is None and cfg.commodity:
+                iron_ore = self._macro_symbol_frame(macro_data, cfg.commodity)
 
         spread = self._build_yield_spread(features.index, au2y, us2y, lag_days=self.YIELD_PUBLICATION_LAG_DAYS)
         features["yield_spread"] = spread
@@ -59,7 +69,7 @@ class FeatureAgent:
         features["ironore_return_20d"] = iron.pct_change(20, fill_method=None) if iron is not None else np.nan
 
         features = features.reset_index().rename(columns={"index": "date"})
-        self.db.save_features(features)
+        self.db.save_features(features, instrument=cfg.name)
         return features
 
     def _macro_symbol_frame(self, macro_data: pd.DataFrame, symbol: str) -> pd.DataFrame | None:

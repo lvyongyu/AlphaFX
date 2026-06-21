@@ -121,8 +121,14 @@ class SignalDiagnosticsAgent:
         return {str(row["signal"]): float(row["hit_rate"]) for _, row in eligible.iterrows()}
 
     def _signal_price_frame(self, market_data: pd.DataFrame, signals: pd.DataFrame) -> pd.DataFrame:
+        # The target pair is whatever FX symbol the context loaded that isn't the
+        # shared DXY/VIX macro context. A per-instrument context holds exactly one
+        # such symbol, so this stays correct for any pair without threading the
+        # symbol through every caller; AUD/USD is the fallback if it's ambiguous.
+        target = [s for s in market_data["symbol"].unique() if s not in (DEFAULT_SYMBOLS.dxy, DEFAULT_SYMBOLS.vix)]
+        target_symbol = target[0] if len(target) == 1 else DEFAULT_SYMBOLS.audusd
         aud = (
-            market_data[market_data["symbol"] == DEFAULT_SYMBOLS.audusd]
+            market_data[market_data["symbol"] == target_symbol]
             .assign(date=lambda x: pd.to_datetime(x["date"]))
             .sort_values("date")[["date", "close"]]
             .reset_index(drop=True)
