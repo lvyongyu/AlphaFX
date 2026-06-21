@@ -74,6 +74,15 @@ class ResearchContext:
     warnings: list[str] = field(default_factory=list)
 
 
+def _clip_dates(frame: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
+    """Restrict a date-indexed frame to [start, end]. Empty/missing-column safe."""
+    if frame.empty or "date" not in frame.columns:
+        return frame
+    dates = pd.to_datetime(frame["date"])
+    mask = (dates >= pd.Timestamp(start)) & (dates <= pd.Timestamp(end))
+    return frame[mask].reset_index(drop=True)
+
+
 def _latest_non_empty(
     signal_agent: QuantSignalAgent, features: pd.DataFrame, signals: pd.DataFrame
 ) -> tuple[pd.Series, pd.Series]:
@@ -143,11 +152,14 @@ def build_context(
         data_agent.download_market_data(start, end)
         data_agent.download_macro_data(start, end)
 
-    market_data = data_agent.load_market_data()
+    # The DB holds whatever has ever been downloaded; restrict the analysis to the
+    # requested [start, end] window so the calibration/backtest window is actually
+    # controlled by start/end (and not silently the entire DB).
+    market_data = _clip_dates(data_agent.load_market_data(), start, end)
     if market_data.empty:
         return ResearchContext(status=NO_DATA, start=start, end=end, leverage=leverage, use_llm=use_llm, **agents)
 
-    macro_data = data_agent.load_macro_data()
+    macro_data = _clip_dates(data_agent.load_macro_data(), start, end)
     if compute_features is not None:
         features = compute_features(market_data, macro_data)
     else:
