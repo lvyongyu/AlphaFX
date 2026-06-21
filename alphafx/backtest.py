@@ -22,9 +22,10 @@ class BacktestAgent:
         slippage_bps: float = 0.0,
         rollover_bps_per_day: float = 0.0,
         swap_annual_pct: float = 0.0,
+        target_symbol: str | None = None,
     ) -> tuple[pd.DataFrame, dict[str, float]]:
         aud = (
-            market_data[market_data["symbol"] == DEFAULT_SYMBOLS.audusd]
+            market_data[market_data["symbol"] == (target_symbol or DEFAULT_SYMBOLS.audusd)]
             .assign(date=lambda x: pd.to_datetime(x["date"]))
             .sort_values("date")[["date", "close"]]
         )

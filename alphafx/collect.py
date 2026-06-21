@@ -69,11 +69,17 @@ class DataAgent:
         self.db.upsert_macro_data(data)
         return data
 
-    def load_market_data(self) -> pd.DataFrame:
-        return self.db.load_market_data([DEFAULT_SYMBOLS.audusd, DEFAULT_SYMBOLS.dxy, DEFAULT_SYMBOLS.vix])
+    def load_market_data(self, instrument: "InstrumentConfig | str | None" = None) -> pd.DataFrame:
+        from .instruments import InstrumentConfig, get_instrument
 
-    def load_macro_data(self) -> pd.DataFrame:
-        return self.db.load_macro_data(["US2Y", "AU2Y", "IRON_ORE"])
+        cfg = instrument if isinstance(instrument, InstrumentConfig) else get_instrument(instrument)
+        return self.db.load_market_data([cfg.fx_symbol, DEFAULT_SYMBOLS.dxy, DEFAULT_SYMBOLS.vix])
+
+    def load_macro_data(self, instrument: "InstrumentConfig | str | None" = None) -> pd.DataFrame:
+        from .instruments import InstrumentConfig, get_instrument
+
+        cfg = instrument if isinstance(instrument, InstrumentConfig) else get_instrument(instrument)
+        return self.db.load_macro_data(cfg.macro_symbols)
 
     def completeness_report(self, market_data: pd.DataFrame) -> pd.DataFrame:
         if market_data.empty:

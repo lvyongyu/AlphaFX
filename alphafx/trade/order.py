@@ -21,12 +21,15 @@ class OrderIntent:
         return self.units != 0
 
 
-def build_order_intent(signal: Any, risk: Any, base_units: int = 1000) -> OrderIntent:
+def build_order_intent(
+    signal: Any, risk: Any, base_units: int = 1000, instrument: str = INSTRUMENT
+) -> OrderIntent:
     """Translate the deterministic risk decision into a broker order intent.
 
     The RiskAgent — not the LLM or the raw signal — decides whether to trade
     (it returns NO TRADE on no edge or extreme volatility). This only formats
     that decision into an order; it never overrides the gate. NO TRADE -> units 0.
+    `instrument` is the broker pair id (e.g. "AUD_USD", "EUR_USD").
     """
     action = str(getattr(risk, "action", "NO TRADE")).upper()
     size_factor = 0.5 if getattr(risk, "position_size", "Standard") == "Small" else 1.0
@@ -38,7 +41,7 @@ def build_order_intent(signal: Any, risk: Any, base_units: int = 1000) -> OrderI
     else:
         side, signed = "none", 0
     return OrderIntent(
-        instrument=INSTRUMENT,
+        instrument=instrument,
         side=side,
         units=signed,
         order_type="MARKET",
