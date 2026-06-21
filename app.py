@@ -55,6 +55,11 @@ if ctx.status == ctxmod.NO_SIGNAL:
 st.title("AlphaFX")
 st.caption("Explainable macro-factor research for AUD/USD. Not financial advice. Not a profit guarantee.")
 
+# A degraded run (dead factors / empty macro) must be impossible to miss — the
+# model silently dropping to fewer factors is what hid the no-trade bug before.
+for _warning in ctx.warnings:
+    st.warning(_warning)
+
 # The answer first — today's call, the factors behind it, plain English.
 hero.render(ctx)
 

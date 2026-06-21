@@ -73,7 +73,10 @@ def step(years: int, leverage: float, base_units: int, refresh: bool) -> dict:
         "date": when,
         "price": price,
         "signal": ctx.latest_signal["signal"],
+        "probability": float(ctx.latest_signal["probability"]),
+        "probability_source": ctx.latest_signal.get("probability_source"),
         "action": ctx.risk.action,
+        "warnings": list(ctx.warnings),
         "intent": {"side": intent.side, "units": intent.units},
         "opened": opened,
         "closed": closed,
@@ -107,6 +110,8 @@ def main() -> None:
     if result["status"] != "ok":
         print(f"No signal ({result['status']}).")
         return
+    for w in result.get("warnings", []):
+        print(f"WARNING: {w}")
     print(f"{result['date']}  price={result['price']:.5f}  {result['signal'].upper()}  action={result['action']}")
     print(f"opened: {result['opened']}")
     if result["closed"]:

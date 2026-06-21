@@ -71,6 +71,7 @@ class ResearchContext:
     ml_signals: pd.DataFrame = field(default_factory=pd.DataFrame)
     ml_latest_signal: str | None = None
     aud_latest: float | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 def _latest_non_empty(
@@ -151,9 +152,21 @@ def build_context(
         features = compute_features(market_data, macro_data)
     else:
         features = feature_agent.build_features(market_data, macro_data=macro_data)
-    raw_signals = signal_agent.generate_signals(features)
+    # Walk-forward adaptive factor signs: flip any factor whose assumed direction
+    # has been anti-predictive in the trailing window (point-in-time, no look-ahead).
+    factor_signs = signal_agent.adaptive_factor_signs(features, market_data, horizon=20)
+    raw_signals = signal_agent.generate_signals(features, factor_signs=factor_signs)
     calibration = diagnostics_agent.calibration_frame(market_data, raw_signals, horizon=20, min_samples=20)
-    signals = signal_agent.generate_signals(features, calibration=calibration)
+    signals = signal_agent.generate_signals(features, calibration=calibration, factor_signs=factor_signs)
+
+    # Surface a degraded model loudly instead of silently running on fewer factors.
+    data_warnings: list[str] = []
+    if macro_data.empty:
+        data_warnings.append("Macro data is empty — yield-spread and iron-ore factors are dead.")
+    dead = [c for c in signal_agent.score_columns if c in raw_signals and raw_signals[c].notna().sum() == 0]
+    if dead:
+        live = len(signal_agent.score_columns) - len(dead)
+        data_warnings.append(f"Dead factors (no data): {', '.join(dead)} — running on {live}/5 factors.")
     forward_diagnostics = diagnostics_agent.forward_return_diagnostics(market_data, raw_signals)
     latest_feature, latest_signal = _latest_non_empty(signal_agent, features, signals)
 
@@ -167,6 +180,7 @@ def build_context(
             market_data=market_data,
             macro_data=macro_data,
             features=features,
+            warnings=data_warnings,
             **agents,
         )
 
@@ -176,6 +190,7 @@ def build_context(
         probability=latest_signal["probability"],
         volatility=latest_feature.get("audusd_vol_20d"),
         user_leverage=leverage,
+        probability_source=latest_signal.get("probability_source", "fallback_score_map"),
     )
 
     # The LLM only runs here, on the latest signal — never inside the Backtest,
@@ -232,5 +247,6 @@ def build_context(
         ml_signals=ml_signals,
         ml_latest_signal=ml_latest_signal,
         aud_latest=aud_latest,
+        warnings=data_warnings,
         **agents,
     )

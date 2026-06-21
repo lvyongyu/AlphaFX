@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 import numpy as np
@@ -10,6 +11,8 @@ from .data.fred_provider import FREDProvider
 from .data.rba_provider import RBAProvider
 from .data.yfinance_provider import YFinanceProvider
 from .database import Database
+
+logger = logging.getLogger(__name__)
 
 
 class DataAgent:
@@ -46,17 +49,23 @@ class DataAgent:
         for provider in providers:
             try:
                 frame = provider.download(start, end)
-                if not frame.empty:
+                if frame.empty:
+                    logger.warning("Macro provider %s returned no rows.", provider.symbol)
+                else:
                     frames.append(frame)
-            except Exception:
-                continue
+            except Exception as exc:  # noqa: BLE001 - keep other providers running
+                logger.warning("Macro provider %s download failed: %s", provider.symbol, exc)
         try:
             au2y = RBAProvider().download_au2y(start, end)
-            if not au2y.empty:
+            if au2y.empty:
+                logger.warning("RBA AU2Y returned no rows.")
+            else:
                 frames.append(au2y)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - AU2Y is one of several macro series
+            logger.warning("RBA AU2Y download failed: %s", exc)
         data = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if data.empty:
+            logger.warning("Macro download produced NO data — yield-spread and iron-ore factors will be dead.")
         self.db.upsert_macro_data(data)
         return data
 
