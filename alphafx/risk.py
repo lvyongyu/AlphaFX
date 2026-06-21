@@ -11,7 +11,7 @@ class RiskSuggestion:
     position_size: str
     leverage: float
     stop_loss: float
-    take_profit: float
+    take_profit: float | None
     warning: str
     max_risk_per_trade: float = 0.01
     regime: str = "normal"
@@ -30,6 +30,9 @@ class RiskAgent:
     # so it must never clear the gate on its own (that was the circular bug:
     # the only signals that "traded" were the ones with no evidence behind them).
     EVIDENCE_SOURCES = ("historical_calibration", "walkforward_calibration")
+    # The signal's edge is validated at a ~20-day horizon; the paper engine's
+    # primary exit is a time barrier at this horizon (PaperBroker.MAX_HOLDING_DAYS).
+    HORIZON_DAYS = 20
 
     def suggest(
         self,
@@ -75,13 +78,20 @@ class RiskAgent:
             warning_parts.append("Volatility is elevated, so leverage is capped.")
         if max_drawdown is not None and pd.notna(max_drawdown) and max_drawdown < -0.15:
             warning_parts.append("Backtest drawdown is material; reduce size or avoid the trade.")
-        vol_stop = max(0.01, min(0.06, float(volatility) / 5.0)) if pd.notna(volatility) else 0.02
+        # Triple-barrier exit (Lopez de Prado): the PRIMARY exit is the time barrier
+        # at the ~20-day signal horizon. The stop-loss is a WIDE, volatility-scaled
+        # DISASTER stop (~2.5x the horizon vol) — wide enough that it rarely fires in
+        # normal noise (so it never cuts winners or the validated edge), but it bounds
+        # tail/gap risk. There is NO take-profit: capping winners while losers run to
+        # the time barrier flips the reward:risk the wrong way (verified by 5y replay).
+        horizon_vol = float(volatility) * (self.HORIZON_DAYS / 252.0) ** 0.5 if pd.notna(volatility) else 0.04
+        disaster_stop = max(0.04, min(0.12, 2.5 * horizon_vol))
         return RiskSuggestion(
             action=action,
             position_size="Small" if high_vol or action == "NO TRADE" else "Standard",
             leverage=leverage,
-            stop_loss=vol_stop,
-            take_profit=vol_stop * 2.0,
+            stop_loss=disaster_stop,
+            take_profit=None,
             warning=" ".join(warning_parts),
             max_risk_per_trade=max_risk_per_trade,
             regime="extreme_vol_no_trade" if extreme_vol else "elevated_vol" if high_vol else "normal",

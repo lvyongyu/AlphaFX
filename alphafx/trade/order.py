@@ -42,8 +42,8 @@ def build_order_intent(signal: Any, risk: Any, base_units: int = 1000) -> OrderI
         side=side,
         units=signed,
         order_type="MARKET",
-        stop_loss_pct=float(getattr(risk, "stop_loss", 0.0)) if signed else None,
-        take_profit_pct=float(getattr(risk, "take_profit", 0.0)) if signed else None,
+        stop_loss_pct=float(getattr(risk, "stop_loss", 0.0)) if signed and getattr(risk, "stop_loss", None) is not None else None,
+        take_profit_pct=float(getattr(risk, "take_profit", 0.0)) if signed and getattr(risk, "take_profit", None) is not None else None,
         rationale=(
             f"{getattr(risk, 'action', 'NO TRADE')}; "
             f"signal={signal.get('signal')}, prob={signal.get('probability')}"

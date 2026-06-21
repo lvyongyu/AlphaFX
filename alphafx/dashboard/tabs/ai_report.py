@@ -6,6 +6,8 @@ from alphafx.database import Database
 from alphafx.ml import ml_rule_agreement
 
 from alphafx.dashboard.context import ResearchContext
+from alphafx.dashboard.ui import fmt_pct
+from alphafx.risk import RiskAgent
 
 
 def render(ctx: ResearchContext) -> None:
@@ -42,7 +44,7 @@ def render(ctx: ResearchContext) -> None:
 {contrarian["alternative_scenario"]}
 
 ### 5. Risk Management
-Suggested action: **{risk.action}**. Leverage: **{risk.leverage:.1f}x**. Stop loss: **{risk.stop_loss:.0%}**. Take profit: **{risk.take_profit:.0%}**.
+Suggested action: **{risk.action}**. Leverage: **{risk.leverage:.1f}x**. Stop loss: **{fmt_pct(risk.stop_loss)}**. Take profit: **{fmt_pct(risk.take_profit)}** (time barrier at the {RiskAgent.HORIZON_DAYS}-day horizon is the primary exit).
 
 ### 6. What To Watch
 {contrarian["watch"]}
