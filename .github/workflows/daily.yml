@@ -1,9 +1,14 @@
 name: Daily paper trading
 
 on:
-  schedule:
-    - cron: "0 22 * * 1-5"   # 22:00 UTC, Mon–Fri
-  workflow_dispatch: {}        # allow manual runs
+  # Daily auto-trading is PAUSED. A multi-window backtest of the live AUD/EUR/CHF
+  # portfolio is net-negative over the full 10-year sample (Sharpe -0.42, -23%);
+  # the strategy has no robust out-of-window edge, so we don't auto-open paper
+  # positions on a schedule. Kept as a manual research job (Run workflow) and the
+  # dashboard/replay scripts. Re-enable the cron once signal quality earns it.
+  # schedule:
+  #   - cron: "0 22 * * 1-5"   # 22:00 UTC, Mon–Fri
+  workflow_dispatch: {}        # manual research runs only
 
 permissions:
   contents: write
