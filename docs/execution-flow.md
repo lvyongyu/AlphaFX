@@ -73,6 +73,66 @@ flowchart TD
 The `ig_client` checks duplicate `risk_engine`'s on purpose. `risk_engine` is the
 gate; the client's are the last line of defence if the gate is ever bypassed.
 
+## What decides BUY vs SELL — and what an open position does
+
+Direction comes **only** from the signal. Nothing in the chain that picks a side
+takes positions as an input: `QuantSignalAgent` emits bullish/bearish/neutral,
+`RiskAgent.suggest()` turns that into `BUY` / `SELL` / `NO TRADE`, and
+`build_order_intent()` formats it. Check their signatures — no position argument
+appears in any of them.
+
+Positions are consulted in exactly one place, [`PaperBroker.place()`](../alphafx/trade/paper.py):
+an open position in that instrument **vetoes any new order, in either direction**.
+It is a one-way veto, not a direction input.
+
+Exits are just as independent of the signal — they fire on time and price only.
+
+```mermaid
+flowchart TD
+    FLAT[flat] -->|"signal picks the side · positions are NOT an input"| OPEN[position open]
+    OPEN -->|"held 20 business days — PRIMARY exit"| FLAT2[flat again]
+    OPEN -->|"disaster stop hit · 4–12%, volatility-scaled"| FLAT2
+    OPEN -.->|"take-profit: none, deliberately"| FLAT2
+
+    NEW["a new signal arrives<br/>(any direction)"] --> VETO{"already in a<br/>position?"}
+    VETO -->|yes| DROP["order dropped"]
+
+    FLIP["the signal flips<br/>AGAINST the open position"] --> GAP["nothing happens:<br/>no close, no reverse —<br/>it runs to the time barrier"]
+
+    classDef gap fill:#5f4a1f,stroke:#e0a13c,color:#fff;
+    classDef stop fill:#5f1f1f,stroke:#ff6b6b,color:#fff;
+    class GAP gap;
+    class DROP stop;
+```
+
+**The amber box is a real gap, not an edge case.** Hold a long, have the signal
+turn bearish, and the system does nothing: it will not close the long (exits only
+watch time and price) and it will not open a short (the veto blocks it). The
+position rides to day 20 with the model pointing the other way. The `ig-demo-bot`
+project recorded the same failure independently — "持多单遇下穿信号时，风控拒绝
+开空单但无人平掉多单，会扛到止损".
+
+Three decisions `risk_engine` (step A.2) has to settle:
+
+1. **On a signal flip** — direction chosen: **close, do not reverse.** An open
+   position is itself information, and riding one for 20 days after the model has
+   turned against it is hard to defend; reversing is rejected because it treats a
+   signal validated at a 20-day horizon as an intraday one.
+
+   **This is not yet validated and must not ship before it is.** The backtest
+   exits purely on the fixed holding period —
+   `exit_idx = min(entry_idx + holding_period, ...)` in `backtest.py` — so every
+   number on record (walk-forward, the multi-window runs, the −23% over ten
+   years) describes the *hold-to-barrier* strategy. "Close on flip" is a
+   **different strategy** with no evidence behind it yet. Add an early-exit mode
+   to the backtest, compare the two over the same windows, and only then wire it
+   into `risk_engine`.
+2. **How to match an existing position** — by epic, or by underlying. This is not
+   academic: the account already holds a manual `CS.D.AUDUSD.CFD.IP` long, while
+   the code trades `CS.D.AUDUSD.MINI.IP`. Matching by epic means the system
+   cannot see that long and may open a MINI short against it.
+3. **Which notional to size 1% off** — see the Demo-balance note in `CLAUDE.md`.
+
 ## Inside ig_client
 
 The part that is easy to forget: **auth is v3 OAuth with a 60-second token**, and
