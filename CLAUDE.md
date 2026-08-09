@@ -177,30 +177,49 @@ A.2 写 `risk_engine.py` 时必须处理这一点：用一个**写死的名义�
 
 ## 环境
 
+**一律用 `.venv/bin/...`，不要用裸的 `python3`。** 裸 `python3` 是系统里那个
+3.9，代码在它上面跑不起来（见下）。
+
 ```bash
 cd ~/Documents/AlphaFX
 
 # 测试：不联网、不用凭证、不耗配额，改完代码先跑这个
-python -m pytest
-python -m pytest tests/test_execution.py -v    # 只跑执行层
+.venv/bin/python -m pytest
+.venv/bin/python -m pytest tests/test_execution.py -v    # 只跑执行层
 
 # lint：规则在 ruff.toml，跟 CI 跑的完全一致
-ruff check .
-ruff check . --fix                             # 能自动修的直接修
+.venv/bin/ruff check .
+.venv/bin/ruff check . --fix                             # 能自动修的直接修
 
 # 研究/展示
-streamlit run app.py                  # 仪表盘
-python scripts/run_signal.py --json   # 无头信号，输出 JSON
-python scripts/paper_trade.py         # 纸面交易
+.venv/bin/streamlit run app.py                  # 仪表盘
+.venv/bin/python scripts/run_signal.py --json   # 无头信号，输出 JSON
+.venv/bin/python scripts/paper_trade.py         # 纸面交易
 
 # 执行层（Demo）
-python -m alphafx.execution.ig_client   # 连通性自检：登录 + 行情 + 持仓，不下单
+.venv/bin/python -m alphafx.execution.ig_client   # 连通性自检：登录 + 行情 + 持仓，不下单
 ```
 
-> ⚠️ **本机 Python 是 3.9.0，CI 跑的是 3.12。** 这个落差会让 CI 绿灯、本机崩溃
-> （已经发生过一次：`zip(..., strict=)` 是 3.10+ 的写法）。两道防线：
-> `ruff.toml` 的 `target-version = "py39"` 让 lint 按 3.9 判，CI 的 test 矩阵
-> 同时跑 3.9 和 3.12。**哪天本机升级了，两处要一起改。**
+### Python 环境（2026-08-09 重建）
+
+**三个地方的版本必须一致，改一个就要改另外两个**：`.venv`、`ruff.toml` 的
+`target-version`、CI 的 `python-version`。现在都是 **3.12**。
+（之前本机 3.9 / CI 3.12 的落差已经害过一次：CI 绿灯，本机 `zip(..., strict=)` 崩。）
+
+重建 venv：
+
+```bash
+uv venv --python 3.12
+uv pip install -r requirements.txt -r requirements-ml.txt
+```
+
+两个环境上的坑：
+
+- **Homebrew 是坏的**，任何 `brew` 命令都直接崩：
+  `unknown or unsupported macOS version: "26.5.2"`。它是 2020 年装的，太老了。
+  **所以装 Python 用 `uv`，别去修 brew**（要修的话得重跑官方安装脚本，属于另一件事）。
+- 系统里的 `/usr/local/bin/python3`（3.9.0）是 **x86_64 构建，跑在 Rosetta 转译下**；
+  `.venv` 里的 3.12 是原生 arm64。所以 venv 不只是版本新，也快。
 
 - 凭证在 `.env`（已 gitignore）：`IG_API_KEY` / `IG_USERNAME` / `IG_PASSWORD`
 - `alphafx/config.py` 的 `load_local_env()` 负责加载，**不依赖 python-dotenv**

@@ -127,8 +127,8 @@ Three things that bite:
 ## Verifying it yourself
 
 ```bash
-python -m pytest tests/test_execution.py -v   # 24 tests, offline, no quota used
-python -m alphafx.execution.ig_client         # real Demo login + quote + positions
+.venv/bin/python -m pytest tests/test_execution.py -v  # 24 tests, offline, no quota
+.venv/bin/python -m alphafx.execution.ig_client        # real Demo login + quote
 ```
 
 The second command places nothing. On a weekend it prints a `marketStatus` other

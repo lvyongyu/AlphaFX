@@ -46,9 +46,11 @@ def render(ctx: ResearchContext) -> None:
     )
 
     metric_cols = st.columns(6)
+    # strict: the column count is hardcoded to match this key list.
     for col, key in zip(
         metric_cols,
         ["total_return", "annualized_return", "sharpe", "max_drawdown", "win_rate", "profit_factor"],
+        strict=True,
     ):
         value = metrics[key]
         col.metric(key.replace("_", " ").title(), fmt_pct(value) if key != "sharpe" and key != "profit_factor" else f"{value:.2f}")

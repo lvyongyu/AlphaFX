@@ -1,12 +1,10 @@
 # Lint config. Its presence also stops ruff from inheriting a config from a
 # parent directory, so CI and a local run always see the same rules.
 
-# The FLOOR, not the CI version. CI runs 3.12 but the dev machine runs 3.9, so
-# pinning this to 3.12 would let ruff bless syntax that green-lights in CI and
-# then crashes locally (e.g. it suggests `zip(..., strict=)`, which is 3.10+).
-# Raise this only after the local interpreter is upgraded and CI pins the same
-# floor.
-target-version = "py39"
+# The FLOOR, and it must equal what BOTH the dev venv and CI run — a gap here
+# lets ruff bless syntax that passes CI and crashes locally. Both are 3.12 as of
+# 2026-08-09; change this, .venv, and the CI matrix together or not at all.
+target-version = "py312"
 line-length = 120
 
 [lint]
