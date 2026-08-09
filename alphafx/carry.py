@@ -151,7 +151,7 @@ class CarryResult:
         return self.returns
 
 
-def _turnover(weights: pd.DataFrame) -> pd.Series:
+def gross_turnover(weights: pd.DataFrame) -> pd.Series:
     """Gross weight change per day, counting the initial entry from flat.
 
     `DataFrame.diff()` leaves the first row NaN; zeroing it would make opening
@@ -200,7 +200,7 @@ def cross_sectional_carry(
     # it is being scored against.
     held = weights.shift(1).fillna(0.0)
     gross = (held * returns).sum(axis=1)
-    traded = _turnover(weights)
+    traded = gross_turnover(weights)
     net = gross - traded * (cost_bps / 1e4)
     return CarryResult(
         returns=net,
@@ -226,7 +226,7 @@ def single_pair_carry(
     weights = np.sign(carry).fillna(0.0)
     held = weights.shift(1).fillna(0.0)
     gross = (held * returns).sum(axis=1)
-    traded = _turnover(weights)
+    traded = gross_turnover(weights)
     return CarryResult(
         returns=gross - traded * (cost_bps / 1e4),
         weights=held,
