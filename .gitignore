@@ -6,3 +6,6 @@ __pycache__/
 .DS_Store
 .env
 .streamlit/secrets.toml
+
+# MCP config holds an API key — keep local, do not commit
+.mcp.json

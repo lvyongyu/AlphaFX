@@ -134,7 +134,7 @@ def main() -> None:
     if not combo.empty:
         port = combo.mean(axis=1)
         corr = float(combo["carry"].corr(combo["tactical"]))
-        print(f"\n=== Two-sleeve portfolio (carry + 20d tactical, equal weight) ===")
+        print("\n=== Two-sleeve portfolio (carry + 20d tactical, equal weight) ===")
         for label, series in [("carry sleeve", combo["carry"]), ("tactical sleeve", combo["tactical"]),
                               ("COMBINED", port)]:
             p = perf(series)

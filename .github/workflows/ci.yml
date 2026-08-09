@@ -5,13 +5,46 @@ on:
   pull_request:
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        # Rules and the target-version floor live in ruff.toml, so this matches
+        # a local `ruff check .` exactly.
+        run: ruff check .
+      - name: No Chinese in code or program output
+        # Project rule (CLAUDE.md): docs and chat are Chinese, but anything the
+        # machine reads or prints is English. Enforced here so it cannot drift.
+        run: |
+          if grep -rlP '[\x{4e00}-\x{9fff}]' --include='*.py' \
+               --exclude-dir=.git --exclude-dir=__pycache__ .; then
+            echo "::error::Chinese characters found in Python source (see CLAUDE.md)"
+            exit 1
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the dev machine's interpreter, 3.12 is the deploy target. Both
+        # are tested because a 3.12-only CI once went green on `zip(strict=)`,
+        # which is 3.10+ and crashes locally. Keep 3.9 here until the dev
+        # machine is upgraded; then raise ruff.toml's target-version to match.
+        python-version: ["3.9", "3.12"]
+    name: test (py${{ matrix.python-version }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install dependencies
         run: |

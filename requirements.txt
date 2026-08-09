@@ -7,4 +7,5 @@ scikit-learn>=1.5
 anthropic>=0.40
 requests>=2.31
 pytest>=8.2
+ruff>=0.6
 

@@ -91,5 +91,16 @@ flowchart TD
 Blue = quant layer (owns the signal). Green = ML research (comparison only).
 Orange = LLM explanation (explains only).
 
-See [DESIGN.md](../DESIGN.md) and [ROADMAP.md](../ROADMAP.md) for the layer
-designs and version history.
+## Downstream of the signal
+
+`RiskAgent` is where this diagram stops and execution begins. Two consumers sit
+below it:
+
+- **`PaperBroker`** — simulated fills, 20-day time barrier, SQLite journal. This
+  is the only thing that "trades" today, and its daily cron is paused.
+- **`alphafx/execution/`** — the IG Demo layer. Transport exists; the hard
+  pre-trade gate and the signal-to-order bridge do not yet.
+
+See [execution-flow.md](execution-flow.md) for the order lifecycle and the full
+refusal chain, and [DESIGN.md](../DESIGN.md) / [ROADMAP.md](../ROADMAP.md) for
+the layer designs and version history.

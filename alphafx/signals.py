@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from .database import Database
+from .instruments import InstrumentConfig, get_instrument
 
 
 def _score_positive(value: float | None) -> int | float:
@@ -68,7 +69,7 @@ class QuantSignalAgent:
         horizon: int = 20,
         window: int = 252,
         min_obs: int = 60,
-        instrument: "InstrumentConfig | str | None" = None,
+        instrument: InstrumentConfig | str | None = None,
     ) -> pd.DataFrame:
         """Point-in-time per-factor sign (+1 keep / -1 flip) from the trailing IC.
 
@@ -83,8 +84,6 @@ class QuantSignalAgent:
         sign is learned only from the past, never from full-sample IC, so it does
         not overfit the way a global sign-flip would.
         """
-        from .instruments import InstrumentConfig, get_instrument
-
         cfg = instrument if isinstance(instrument, InstrumentConfig) else get_instrument(instrument)
         votes = self._factor_votes(features).assign(date=lambda x: pd.to_datetime(x["date"]))
         aud = (
@@ -110,7 +109,7 @@ class QuantSignalAgent:
         weights: dict[str, float] | None = None,
         factor_signs: pd.DataFrame | None = None,
         persist: bool = True,
-        instrument: "InstrumentConfig | str | None" = None,
+        instrument: InstrumentConfig | str | None = None,
     ) -> pd.DataFrame:
         # `weights` is an OPTIONAL, experimental factor weighting. Default (None)
         # keeps the equal-weight rule signal unchanged — equal weight is robust and
@@ -175,8 +174,6 @@ class QuantSignalAgent:
             out = out.drop(columns=["calibrated_probability"])
         out["confidence"] = out.apply(lambda row: self.map_confidence(row["score"], row[score_cols].notna().sum()), axis=1)
         if persist:
-            from .instruments import InstrumentConfig, get_instrument
-
             cfg = instrument if isinstance(instrument, InstrumentConfig) else get_instrument(instrument)
             self.db.save_signals(out, instrument=cfg.name)
         return out
