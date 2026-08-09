@@ -33,6 +33,7 @@ import pandas as pd
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from alphafx.carry import is_degenerate  # noqa: E402
 from alphafx.config import load_local_env  # noqa: E402
 from alphafx.dashboard.context import build_context  # noqa: E402
 from alphafx.database import Database  # noqa: E402
@@ -45,7 +46,10 @@ COST_BPS = 2.0  # per unit of turnover, matching BacktestAgent's transaction_cos
 
 def perf(daily: pd.Series) -> dict:
     r = daily.dropna()
-    if r.empty or r.std() == 0:
+    # `std() == 0` misses a constant series: floating-point noise leaves ~1e-19
+    # rather than exact zero, which produces a Sharpe near 1e16 in a degenerate
+    # window (a thin year in the breakdown below). Compare against its own scale.
+    if r.empty or is_degenerate(r):
         return {"sharpe": 0.0, "ret%": 0.0, "maxDD%": 0.0}
     eq = (1 + r).cumprod()
     return {
