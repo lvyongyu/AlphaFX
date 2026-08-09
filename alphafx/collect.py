@@ -11,6 +11,7 @@ from .data.fred_provider import FREDProvider
 from .data.rba_provider import RBAProvider
 from .data.yfinance_provider import YFinanceProvider
 from .database import Database
+from .instruments import InstrumentConfig, get_instrument
 
 logger = logging.getLogger(__name__)
 
@@ -69,15 +70,11 @@ class DataAgent:
         self.db.upsert_macro_data(data)
         return data
 
-    def load_market_data(self, instrument: "InstrumentConfig | str | None" = None) -> pd.DataFrame:
-        from .instruments import InstrumentConfig, get_instrument
-
+    def load_market_data(self, instrument: InstrumentConfig | str | None = None) -> pd.DataFrame:
         cfg = instrument if isinstance(instrument, InstrumentConfig) else get_instrument(instrument)
         return self.db.load_market_data([cfg.fx_symbol, DEFAULT_SYMBOLS.dxy, DEFAULT_SYMBOLS.vix])
 
-    def load_macro_data(self, instrument: "InstrumentConfig | str | None" = None) -> pd.DataFrame:
-        from .instruments import InstrumentConfig, get_instrument
-
+    def load_macro_data(self, instrument: InstrumentConfig | str | None = None) -> pd.DataFrame:
         cfg = instrument if isinstance(instrument, InstrumentConfig) else get_instrument(instrument)
         return self.db.load_macro_data(cfg.macro_symbols)
 

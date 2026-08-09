@@ -52,9 +52,11 @@ AlphaFX 已经是一个结构良好的 AUD/USD 宏观因子**研究平台**
   - **所有字符串字面量**，包括异常消息、错误码对照表、日志、`print` 出来的东西
   - 测试里的断言文案（`pytest.raises(match=...)` 也算）
 
-  **不适用**：`.md` 文档（本文件、README、ROADMAP）和对话——那些继续用中文。
-  分界线是「机器读的 / 会进 stdout 和日志的」用英文，「我读的」用中文。
-  检查方法：`grep -rlP '[\x{4e00}-\x{9fff}]' --include="*.py" .` 应该没有输出。
+  **例外只有两个**：**本文件**（CLAUDE.md，是给我看的交接说明）和**对话**，用中文。
+  `README.md` / `ROADMAP.md` / `DESIGN.md` / `docs/` 本来就是英文，**保持英文**。
+
+  由 CI 的 `lint` job 自动拦截，本地自查：
+  `grep -rlP '[\x{4e00}-\x{9fff}]' --include="*.py" .` 应该没有输出。
 - `daily.yml` 的自动交易**保持暂停**，直到走完下面路线图的第 4 步
 - **执行层永远锁定 Demo 环境**；接真实环境不在本蓝图范围内
 - 风控规则**只能收紧不能放宽**；`MIN_CONFIDENCE`、`EVIDENCE_SOURCES` 门槛不能绕过
@@ -182,6 +184,10 @@ cd ~/Documents/AlphaFX
 python -m pytest
 python -m pytest tests/test_execution.py -v    # 只跑执行层
 
+# lint：规则在 ruff.toml，跟 CI 跑的完全一致
+ruff check .
+ruff check . --fix                             # 能自动修的直接修
+
 # 研究/展示
 streamlit run app.py                  # 仪表盘
 python scripts/run_signal.py --json   # 无头信号，输出 JSON
@@ -190,6 +196,11 @@ python scripts/paper_trade.py         # 纸面交易
 # 执行层（Demo）
 python -m alphafx.execution.ig_client   # 连通性自检：登录 + 行情 + 持仓，不下单
 ```
+
+> ⚠️ **本机 Python 是 3.9.0，CI 跑的是 3.12。** 这个落差会让 CI 绿灯、本机崩溃
+> （已经发生过一次：`zip(..., strict=)` 是 3.10+ 的写法）。两道防线：
+> `ruff.toml` 的 `target-version = "py39"` 让 lint 按 3.9 判，CI 的 test 矩阵
+> 同时跑 3.9 和 3.12。**哪天本机升级了，两处要一起改。**
 
 - 凭证在 `.env`（已 gitignore）：`IG_API_KEY` / `IG_USERNAME` / `IG_PASSWORD`
 - `alphafx/config.py` 的 `load_local_env()` 负责加载，**不依赖 python-dotenv**

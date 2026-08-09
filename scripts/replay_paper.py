@@ -29,7 +29,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from alphafx.config import DEFAULT_SYMBOLS, load_local_env  # noqa: E402
+from alphafx.config import load_local_env  # noqa: E402
 from alphafx.dashboard.context import build_context  # noqa: E402
 from alphafx.database import Database  # noqa: E402
 from alphafx.risk import RiskAgent  # noqa: E402

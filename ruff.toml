@@ -1,0 +1,30 @@
+# Lint config. Its presence also stops ruff from inheriting a config from a
+# parent directory, so CI and a local run always see the same rules.
+
+# The FLOOR, not the CI version. CI runs 3.12 but the dev machine runs 3.9, so
+# pinning this to 3.12 would let ruff bless syntax that green-lights in CI and
+# then crashes locally (e.g. it suggests `zip(..., strict=)`, which is 3.10+).
+# Raise this only after the local interpreter is upgraded and CI pins the same
+# floor.
+target-version = "py39"
+line-length = 120
+
+[lint]
+# Deliberately narrow: rules that catch real defects, not style opinions.
+#   E4/E7/E9  import, statement and syntax errors
+#   F         pyflakes — undefined names, unused imports, broken f-strings
+#   B         bugbear — silent-truncation zip(), mutable defaults, and friends
+select = ["E4", "E7", "E9", "F", "B"]
+
+# Not enabled, on purpose:
+#   I    isort would hoist `from alphafx... import` above the `sys.path.insert`
+#        line that scripts/*.py need to run at all, breaking them. Import order
+#        is cosmetic; a broken script is not.
+#   E501 the codebase already runs to 162 columns and reflowing it would touch
+#        every file for no defect caught.
+#   UP, SIM  style-only modernisation of code that already works.
+
+[lint.per-file-ignores]
+# Scripts must extend sys.path before importing the package, so their imports
+# cannot all sit at the top of the file.
+"scripts/*.py" = ["E402"]

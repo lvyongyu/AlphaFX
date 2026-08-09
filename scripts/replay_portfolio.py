@@ -124,7 +124,7 @@ def main() -> None:
     aud_only = float(per.loc[per["pair"] == "AUDUSD", "sharpe"].iloc[0]) if "AUDUSD" in set(per["pair"]) else float("nan")
     breadth = float((rets.fillna(0.0) != 0).sum(axis=1).mean())
 
-    print(f"\n=== PORTFOLIO ===")
+    print("\n=== PORTFOLIO ===")
     print(f"combined Sharpe : {sharpe(port):+.2f}")
     print(f"total return    : {(port_eq.iloc[-1]-1)*100:+.1f}%")
     print(f"max drawdown    : {max_drawdown(port_eq)*100:.1f}%")
