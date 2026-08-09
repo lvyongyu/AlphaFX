@@ -288,7 +288,7 @@ class FactorDiagnosticsAgent:
         diag = self.analyze(features, horizon=horizon)
         if diag.empty:
             return {}
-        ic_by_feature = dict(zip(diag["factor"], diag["information_coefficient"].abs()))
+        ic_by_feature = dict(zip(diag["factor"], diag["information_coefficient"].abs(), strict=True))
         weights = {
             score_col: float(ic_by_feature.get(raw, 0.0))
             for score_col, (raw, _label) in self.scoring_features.items()

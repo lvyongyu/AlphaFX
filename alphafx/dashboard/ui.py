@@ -27,5 +27,7 @@ def metric_cards(signal: pd.Series, risk) -> None:
         ("Stop Loss", fmt_pct(risk.stop_loss)),
         ("Take Profit", fmt_pct(risk.take_profit)),
     ]
-    for col, (label, value) in zip(cols, values):
+    # strict: cols is sized to match `values`, so a length mismatch is a bug —
+    # better a loud error than a metric silently missing from the dashboard.
+    for col, (label, value) in zip(cols, values, strict=True):
         col.metric(label, value)

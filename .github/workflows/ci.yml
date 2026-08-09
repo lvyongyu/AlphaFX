@@ -31,20 +31,15 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 3.9 is the dev machine's interpreter, 3.12 is the deploy target. Both
-        # are tested because a 3.12-only CI once went green on `zip(strict=)`,
-        # which is 3.10+ and crashes locally. Keep 3.9 here until the dev
-        # machine is upgraded; then raise ruff.toml's target-version to match.
-        python-version: ["3.9", "3.12"]
-    name: test (py${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          # Must match the dev venv (.venv, built by `uv venv --python 3.12`)
+          # and ruff.toml's target-version. When CI outran the dev machine it
+          # went green on `zip(strict=)`, which is 3.10+ and crashed locally —
+          # so these three move together or not at all.
+          python-version: "3.12"
           cache: pip
       - name: Install dependencies
         run: |
