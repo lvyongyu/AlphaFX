@@ -7,6 +7,7 @@ when no API key is set or a call fails.
 """
 
 from .client import LLMClient, LLMError, LLMResponse
+from .debate import DebateResult, DebateTurn, LLMDebateAgent
 from .evidence import build_evidence_pack
 from .narrator import LLMContrarianAgent, LLMExplanationAgent, LLMJudgeAgent
 
@@ -18,4 +19,7 @@ __all__ = [
     "LLMExplanationAgent",
     "LLMContrarianAgent",
     "LLMJudgeAgent",
+    "LLMDebateAgent",
+    "DebateResult",
+    "DebateTurn",
 ]

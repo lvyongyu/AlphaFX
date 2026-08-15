@@ -18,6 +18,21 @@ JUDGE_SCHEMA = {
     "additionalProperties": False,
 }
 
+# One turn in the red-team debate. Note what is NOT here: no direction, no
+# verdict, no confidence. There is deliberately no field a debater could use to
+# express a signal of its own, so a multi-round debate cannot drift into
+# re-rating the quant call no matter how many rounds it runs.
+DEBATE_TURN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "claim": {"type": "string"},
+        "evidence_used": {"type": "string"},
+        "weakest_link": {"type": "string"},
+    },
+    "required": ["claim", "evidence_used", "weakest_link"],
+    "additionalProperties": False,
+}
+
 CONTRARIAN_SCHEMA = {
     "type": "object",
     "properties": {

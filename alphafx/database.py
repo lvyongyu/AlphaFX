@@ -139,6 +139,19 @@ CREATE TABLE IF NOT EXISTS paper_positions (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Review notes attached to a logged decision (`paper_journal` is the decision
+-- log itself). Archive only: written during review, read by a human, and never
+-- consulted by the signal, risk, or execution path. `author` records provenance
+-- ("human", or "llm:<model>" for an AI post-mortem note).
+CREATE TABLE IF NOT EXISTS decision_lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_date TEXT NOT NULL,
+    instrument TEXT NOT NULL DEFAULT 'AUDUSD',
+    author TEXT,
+    lesson TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS llm_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT,
@@ -354,6 +367,26 @@ class Database:
     def load_paper_journal(self) -> pd.DataFrame:
         with self.connect() as conn:
             return pd.read_sql_query("SELECT * FROM paper_journal ORDER BY date", conn, parse_dates=["date"])
+
+    def insert_decision_lesson(self, row: dict[str, object]) -> None:
+        """Append one review note. Append-only: an archive that can be edited to
+        match a later opinion is not a record of what was actually learned."""
+        columns = ["decision_date", "instrument", "author", "lesson"]
+        values = [row.get(column) for column in columns]
+        sql = f"""
+        INSERT INTO decision_lessons ({", ".join(columns)})
+        VALUES ({", ".join("?" for _ in columns)})
+        """
+        with self.connect() as conn:
+            conn.execute(sql, values)
+
+    def load_decision_lessons(self, instrument: str | None = None) -> pd.DataFrame:
+        where = "WHERE instrument = ?" if instrument else ""
+        params = [instrument] if instrument else []
+        with self.connect() as conn:
+            return pd.read_sql_query(
+                f"SELECT * FROM decision_lessons {where} ORDER BY decision_date, id", conn, params=params
+            )
 
     def log_llm_call(self, row: dict[str, object]) -> None:
         """Persist one LLM call so any explanation can be reproduced/reviewed."""
