@@ -47,14 +47,23 @@ class _Narrator:
             self.client = None
         self.db = db
 
-    def _log(self, system: str, user: str, resp: LLMResponse | None, when: Any = None) -> None:
+    def _log(
+        self,
+        system: str,
+        user: str,
+        resp: LLMResponse | None,
+        when: Any = None,
+        role: str | None = None,
+    ) -> None:
+        """Persist one call. `role` overrides self.role for agents that make
+        several differently-roled calls (e.g. the debate's two sides)."""
         if self.db is None or resp is None:
             return
         try:
             self.db.log_llm_call(
                 {
                     "date": str(when) if when is not None else None,
-                    "role": self.role,
+                    "role": role or self.role,
                     "model": resp.model,
                     "prompt_hash": resp.prompt_hash,
                     "system_prompt": system,
