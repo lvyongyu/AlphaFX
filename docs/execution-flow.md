@@ -4,11 +4,12 @@ How a signal would become an IG Demo order — and every place that is currently
 blocked. Companion to [architecture.md](architecture.md), which covers the
 research pipeline that produces the signal in the first place.
 
-**Nothing in AlphaFX places an order today.** `risk_engine` is now built, but it
-refuses everything: `EXECUTION_ENABLED` is False until the signal-quality gate
-opens, and the event-blackout calendar has no data in it yet. `bridge.py` and
-`scripts/execute_demo.py` — the parts that would actually act on a decision —
-are not written. This document marks what is real and what is not.
+**Nothing in AlphaFX places an order today.** The chain is now complete end to
+end — signal file, gate, transport — and it refuses everything:
+`EXECUTION_ENABLED` is False until the signal-quality gate opens, which makes
+`execute_demo.py --live` inert by construction, and the event-blackout calendar
+has no data in it yet. What the dry-run does produce is a log of the order it
+WOULD have sent, run after run, to compare against the paper book.
 
 ## Where execution sits
 
@@ -35,12 +36,11 @@ flowchart LR
 
     classDef built fill:#1f3a5f,stroke:#4da3ff,color:#fff;
     classDef todo fill:#3a3a3a,stroke:#888,color:#ccc,stroke-dasharray:4 3;
-    class DATA,FEAT,QS,RISK,PAPER,JSON,IGC,RE built;
-    class BRIDGE todo;
+    class DATA,FEAT,QS,RISK,PAPER,JSON,IGC,RE,BRIDGE built;
 ```
 
-Solid blue is built and tested. Dashed grey is step A.3, not yet written — so the
-dotted arrows are the paths that do not exist yet.
+Everything in the diagram is built and tested. What stops an order is not a
+missing part — it is `EXECUTION_ENABLED`, plus an empty blackout calendar.
 
 ## The refusal chain
 
@@ -65,7 +65,7 @@ flowchart TD
     G2 -- pass --> G3{ig_client.open_position}
     G3 -- no stop_distance --> N7[IGError]
     G3 -- size over MAX_SIZE --> N8[IGError]
-    G3 -- pass --> G4{execute_demo.py<br/>step A.3 · not built}
+    G3 -- pass --> G4{execute_demo.py}
     G4 -- no --live flag --> N9[dry-run: log only]
     G4 -- pass --> IG[[POST /positions/otc]]
     IG --> C{GET /confirms/ref<br/>dealStatus}
@@ -199,12 +199,33 @@ Three things that bite:
 - **No LLM anywhere in this package.** The LLM explains and critiques; it is
   never in a path that can move money.
 
+## The dry-run record
+
+`scripts/execute_demo.py` appends one `execution_log` row per instrument per run,
+refusals included, carrying the direction, size and stop that would have been
+sent. A refusal that recorded nothing would be useless: the comparison the
+roadmap asks for is between what execution *would* have done and what the paper
+book actually did, over the same dates, and that needs both sides written down.
+
+```
+AUDUSD  REFUSE (would have sent BUY 0.2 lots, stop 325.0 pts)
+          - automated execution is disabled (EXECUTION_ENABLED is False ...)
+```
+
+The bridge contributes no rules to that line. Every reason in it comes from
+`risk_engine`; a test asserts the bridge module holds no numeric constants at all,
+so a threshold cannot quietly grow there instead of in the engine where it would
+be tested as a rule.
+
 ## Verifying it yourself
 
 ```bash
-.venv/bin/python -m pytest tests/test_execution.py -v  # 24 tests, offline, no quota
+.venv/bin/python -m pytest tests/test_execution.py tests/test_risk_engine.py tests/test_bridge.py -v
 .venv/bin/python -m alphafx.execution.ig_client        # real Demo login + quote
+.venv/bin/python scripts/execute_demo.py               # dry-run against IG Demo
+.venv/bin/python scripts/execute_demo.py --log         # what it would have sent
 ```
 
-The second command places nothing. On a weekend it prints a `marketStatus` other
-than `TRADEABLE`, which is the expected result, not a fault.
+92 tests, all offline, no credentials and no quota. The last three commands place
+nothing. On a weekend `marketStatus` is not `TRADEABLE`, which is the expected
+result, not a fault.

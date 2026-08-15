@@ -118,11 +118,11 @@ data, which is what keeps the whole check surface unit-testable.
    monthly limit, and only because "no new positions *this month*" is that rule's
    own definition rather than an auto-clear. Row 14.
 
-## What A.2 does not cover
+## What the engine does not cover
 
 - **Placing anything.** The engine decides; `bridge.py` and
-  `scripts/execute_demo.py` (step A.3) are what would act on the decision, and
-  they are not written.
+  `scripts/execute_demo.py` act on the decision, and they add no rules — every
+  refusal in their output comes from here.
 - **Closing or managing an open position.** Every check here is pre-trade. Exit
   logic still lives in `PaperBroker`'s time barrier.
 - **The calendar data** for row 18.

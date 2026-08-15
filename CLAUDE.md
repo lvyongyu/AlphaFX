@@ -83,8 +83,8 @@ AlphaFX 已经是一个结构良好的 AUD/USD 宏观因子**研究平台**
 |---|---|---|
 | `alphafx/execution/ig_client.py` | IG REST 封装（认证 / 行情 / 持仓 / 开仓 / 平仓） | ✅ A.1 完成 |
 | `alphafx/execution/risk_engine.py` | 执行侧硬风控（确定性规则，**永不智能化**） | ✅ A.2 完成（40 条测试），逐条对照见 `docs/risk-engine-checklist.md` |
-| `alphafx/execution/bridge.py` | 信号→执行桥：读 `data/latest_signal.json`，经 risk_engine 校验后转 IG 订单 | 🔴 A.3 待做 |
-| `scripts/execute_demo.py` | 入口，**默认 dry-run**，`--live` 才真实提交到 Demo | 🔴 A.3 待做 |
+| `alphafx/execution/bridge.py` | 信号→执行桥：读 `data/latest_signal.json`，经 risk_engine 校验后转 IG 订单 | ✅ A.3 完成（28 条测试） |
+| `scripts/execute_demo.py` | 入口，**默认 dry-run**，`--live` 才真实提交到 Demo | ✅ A.3 完成 |
 
 ### 执行侧硬风控（`risk_engine.py`）
 
@@ -212,7 +212,9 @@ cd ~/Documents/AlphaFX
 
 # 执行层（Demo）
 .venv/bin/python -m alphafx.execution.ig_client   # 连通性自检：登录 + 行情 + 持仓，不下单
-.venv/bin/python -m pytest tests/test_risk_engine.py -v   # 执行侧风控，40 条，离线
+.venv/bin/python -m pytest tests/test_risk_engine.py tests/test_bridge.py -v   # 风控+桥，68 条，离线
+.venv/bin/python scripts/execute_demo.py          # dry-run：只读行情/持仓，不下单
+.venv/bin/python scripts/execute_demo.py --log    # 看历史「若执行会下什么单」
 ```
 
 ### Python 环境（2026-08-09 重建）
@@ -254,8 +256,13 @@ uv pip install -r requirements.txt -r requirements-ml.txt
    ① 财经日历 `ECONOMIC_CALENDAR` 是空的（**空日历 = 拒绝一切**，故意的），
    要你从 RBA/美联储官方日程填进去，属于查资料不是写代码；
    ② 跨品种相关性上限（第 8 条）推迟，暂时用总手数上限 3.0 手当粗糙代理
-3. 🔴 实现 `bridge.py` + `scripts/execute_demo.py`，dry-run 模式：
-   每次运行记录「若执行会下什么单」到日志/数据库，与纸面交易并行对照
+3. ✅ 实现 `bridge.py` + `scripts/execute_demo.py`，28 条离线测试
+   —— 每次运行每个品种写一行 `execution_log`（**拒绝的也写**，带方向/手数/止损点数），
+   `--log` 看历史。这就是跟纸面交易并行对照的那份记录。
+   **`--live` 现在是空转的**：`EXECUTION_ENABLED=False` 让 `allowed` 永远为假，
+   脚本会直说而不是假装武装好了。
+   注意：`data/latest_signal.json` 里那份是改成组合导出之前的旧格式，
+   桥会拒绝并让你重跑 `scripts/paper_trade.py --export`
 
 ### B. 信号质量攻坚（决定闸门何时开，继续 ROADMAP V2 方向）
 

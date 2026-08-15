@@ -108,6 +108,11 @@ def step(years: int, leverage: float, base_units: int, refresh: bool, portfolio:
             "probability": float(ctx.latest_signal["probability"]),
             "probability_source": ctx.latest_signal.get("probability_source"),
             "action": ctx.risk.action,
+            # The execution bridge sizes off the stop, so a leg without one is
+            # unusable downstream — export it here rather than have the bridge
+            # guess a default.
+            "stop_loss": ctx.risk.stop_loss,
+            "take_profit": ctx.risk.take_profit,
             "warnings": list(ctx.warnings),
             "intent": {"side": intent.side, "units": intent.units},
             "opened": opened,

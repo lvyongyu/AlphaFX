@@ -166,6 +166,29 @@ CREATE TABLE IF NOT EXISTS execution_equity (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- One row per instrument per execute_demo run, dry-run runs included. This is
+-- the record that makes a dry-run worth running at all: it says what WOULD have
+-- been sent and why it was refused, so it can be compared against the paper
+-- book over the same dates. Append-only.
+CREATE TABLE IF NOT EXISTS execution_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at TEXT NOT NULL,
+    signal_date TEXT,
+    instrument TEXT,
+    epic TEXT,
+    mode TEXT,
+    direction TEXT,
+    size REAL,
+    stop_distance_points REAL,
+    risk_checks_passed INTEGER,
+    allowed INTEGER,
+    reasons TEXT,
+    submitted INTEGER,
+    deal_reference TEXT,
+    deal_status TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Review notes attached to a logged decision (`paper_journal` is the decision
 -- log itself). Archive only: written during review, read by a human, and never
 -- consulted by the signal, risk, or execution path. `author` records provenance
@@ -394,6 +417,27 @@ class Database:
     def load_paper_journal(self) -> pd.DataFrame:
         with self.connect() as conn:
             return pd.read_sql_query("SELECT * FROM paper_journal ORDER BY date", conn, parse_dates=["date"])
+
+    def log_execution_attempt(self, row: dict[str, object]) -> None:
+        """Append one attempt — dry-run or live, allowed or refused."""
+        columns = [
+            "run_at", "signal_date", "instrument", "epic", "mode", "direction", "size",
+            "stop_distance_points", "risk_checks_passed", "allowed", "reasons",
+            "submitted", "deal_reference", "deal_status",
+        ]
+        values = [row.get(column) for column in columns]
+        sql = f"""
+        INSERT INTO execution_log ({", ".join(columns)})
+        VALUES ({", ".join("?" for _ in columns)})
+        """
+        with self.connect() as conn:
+            conn.execute(sql, values)
+
+    def load_execution_log(self, limit: int = 100) -> pd.DataFrame:
+        with self.connect() as conn:
+            return pd.read_sql_query(
+                "SELECT * FROM execution_log ORDER BY id DESC LIMIT ?", conn, params=[int(limit)]
+            )
 
     def record_execution_balance(self, when: str, balance: float) -> None:
         """Store the realised cash balance for one date (idempotent per date)."""
