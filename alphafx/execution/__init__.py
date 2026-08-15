@@ -5,8 +5,13 @@ research and never places an order. This package is deliberately kept thin and
 deterministic:
 
     ig_client    REST transport only — no strategy, no sizing decisions
-    risk_engine  hard, non-negotiable pre-trade checks (step A.2)
-    bridge       signal JSON -> validated IG order (step A.3)
+    risk_engine  hard, non-negotiable pre-trade checks — deterministic, never
+                 intelligent; see docs/risk-engine-checklist.md
+    bridge       signal JSON -> validated IG order (step A.3, not written)
+
+`risk_engine.EXECUTION_ENABLED` is False: nothing in AlphaFX places an order
+until the signal-quality gate opens, and that switch lives in code so that
+re-enabling the daily.yml cron alone cannot start trading.
 
 The broker endpoint is locked to IG's Demo environment; see `ig_client.BASE_URL`.
 """

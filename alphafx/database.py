@@ -139,6 +139,33 @@ CREATE TABLE IF NOT EXISTS paper_positions (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Execution-layer circuit-breaker state. This MUST be on disk: the daily job is
+-- a fresh process every run, so an in-memory breaker resets before it can ever
+-- fire, which means it does not exist. `scope` bounds a breaker to a period
+-- ('2026-08' for the monthly loss limit); a NULL scope never expires on its own
+-- and can only be cleared by a human via `cleared_by`.
+CREATE TABLE IF NOT EXISTS execution_breakers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    breaker TEXT NOT NULL,
+    scope TEXT,
+    tripped_at TEXT NOT NULL,
+    tripped_value REAL,
+    threshold REAL,
+    detail TEXT,
+    cleared_at TEXT,
+    cleared_by TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Realised account balance over time: the input to both breakers, and the only
+-- record of the high-water mark. Cash balance, NOT equity — see risk_engine.
+CREATE TABLE IF NOT EXISTS execution_equity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL UNIQUE,
+    balance REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Review notes attached to a logged decision (`paper_journal` is the decision
 -- log itself). Archive only: written during review, read by a human, and never
 -- consulted by the signal, risk, or execution path. `author` records provenance
@@ -367,6 +394,45 @@ class Database:
     def load_paper_journal(self) -> pd.DataFrame:
         with self.connect() as conn:
             return pd.read_sql_query("SELECT * FROM paper_journal ORDER BY date", conn, parse_dates=["date"])
+
+    def record_execution_balance(self, when: str, balance: float) -> None:
+        """Store the realised cash balance for one date (idempotent per date)."""
+        sql = """
+        INSERT INTO execution_equity (date, balance) VALUES (?, ?)
+        ON CONFLICT(date) DO UPDATE SET balance = excluded.balance
+        """
+        with self.connect() as conn:
+            conn.execute(sql, [str(when), float(balance)])
+
+    def load_execution_balances(self) -> pd.DataFrame:
+        with self.connect() as conn:
+            return pd.read_sql_query("SELECT date, balance FROM execution_equity ORDER BY date", conn)
+
+    def trip_execution_breaker(self, row: dict[str, object]) -> None:
+        columns = ["breaker", "scope", "tripped_at", "tripped_value", "threshold", "detail"]
+        values = [row.get(column) for column in columns]
+        sql = f"""
+        INSERT INTO execution_breakers ({", ".join(columns)})
+        VALUES ({", ".join("?" for _ in columns)})
+        """
+        with self.connect() as conn:
+            conn.execute(sql, values)
+
+    def clear_execution_breaker(self, breaker: str, cleared_at: str, cleared_by: str) -> int:
+        """Clear every open trip of one breaker. Returns how many were cleared."""
+        sql = """
+        UPDATE execution_breakers SET cleared_at = ?, cleared_by = ?
+        WHERE breaker = ? AND cleared_at IS NULL
+        """
+        with self.connect() as conn:
+            return int(conn.execute(sql, [cleared_at, cleared_by, breaker]).rowcount)
+
+    def load_execution_breakers(self, active_only: bool = False) -> pd.DataFrame:
+        where = "WHERE cleared_at IS NULL" if active_only else ""
+        with self.connect() as conn:
+            return pd.read_sql_query(
+                f"SELECT * FROM execution_breakers {where} ORDER BY id", conn
+            )
 
     def insert_decision_lesson(self, row: dict[str, object]) -> None:
         """Append one review note. Append-only: an archive that can be edited to

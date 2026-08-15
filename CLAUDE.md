@@ -64,6 +64,8 @@ AlphaFX 已经是一个结构良好的 AUD/USD 宏观因子**研究平台**
   `grep -rlP '[\x{4e00}-\x{9fff}]' --include="*.py" .` 应该没有输出。
 - `daily.yml` 的自动交易**保持暂停**，直到走完下面路线图的第 4 步
 - **执行层永远锁定 Demo 环境**；接真实环境不在本蓝图范围内
+- **`risk_engine.EXECUTION_ENABLED` 保持 `False`**，直到走完路线图第 4 步。
+  这是 `daily.yml` 那个闸门在代码里的另一半：光把 cron 打开也开不了单
 - 风控规则**只能收紧不能放宽**；`MIN_CONFIDENCE`、`EVIDENCE_SOURCES` 门槛不能绕过
 - **LLM 相关代码不得进入任何交易决策路径**（只做解释/复盘/红队）
 - `.env` 不入库、不打印；**不要让我在对话里粘贴任何凭证**
@@ -80,7 +82,7 @@ AlphaFX 已经是一个结构良好的 AUD/USD 宏观因子**研究平台**
 | 文件 | 职责 | 状态 |
 |---|---|---|
 | `alphafx/execution/ig_client.py` | IG REST 封装（认证 / 行情 / 持仓 / 开仓 / 平仓） | ✅ A.1 完成 |
-| `alphafx/execution/risk_engine.py` | 执行侧硬风控（确定性规则，**永不智能化**） | 🔴 A.2 待做，检查清单见 `docs/risk-engine-checklist.md` |
+| `alphafx/execution/risk_engine.py` | 执行侧硬风控（确定性规则，**永不智能化**） | ✅ A.2 完成（40 条测试），逐条对照见 `docs/risk-engine-checklist.md` |
 | `alphafx/execution/bridge.py` | 信号→执行桥：读 `data/latest_signal.json`，经 risk_engine 校验后转 IG 订单 | 🔴 A.3 待做 |
 | `scripts/execute_demo.py` | 入口，**默认 dry-run**，`--live` 才真实提交到 Demo | 🔴 A.3 待做 |
 
@@ -210,6 +212,7 @@ cd ~/Documents/AlphaFX
 
 # 执行层（Demo）
 .venv/bin/python -m alphafx.execution.ig_client   # 连通性自检：登录 + 行情 + 持仓，不下单
+.venv/bin/python -m pytest tests/test_risk_engine.py -v   # 执行侧风控，40 条，离线
 ```
 
 ### Python 环境（2026-08-09 重建）
@@ -246,9 +249,11 @@ uv pip install -r requirements.txt -r requirements-ml.txt
 
 1. ✅ 迁入 `ig_client.py` 到 `alphafx/execution/`，补单元测试（mock HTTP，24 条）
    —— 2026-08-09 已对真实 Demo 账户跑通登录 / 行情 / 持仓 / 账户余额（未下单）
-2. 🔴 实现 `risk_engine.py`（含熔断状态持久化到 SQLite），补测试
-   —— 检查清单/规格已写好：`docs/risk-engine-checklist.md`，25 条逐条标了
-   built / A.2 / later / n/a，落地时每条 **A.2** 都要对应至少一个测试
+2. ✅ 实现 `risk_engine.py`（熔断状态持久化到 SQLite），40 条离线测试
+   —— 逐条对照见 `docs/risk-engine-checklist.md`。**还剩两件事**：
+   ① 财经日历 `ECONOMIC_CALENDAR` 是空的（**空日历 = 拒绝一切**，故意的），
+   要你从 RBA/美联储官方日程填进去，属于查资料不是写代码；
+   ② 跨品种相关性上限（第 8 条）推迟，暂时用总手数上限 3.0 手当粗糙代理
 3. 🔴 实现 `bridge.py` + `scripts/execute_demo.py`，dry-run 模式：
    每次运行记录「若执行会下什么单」到日志/数据库，与纸面交易并行对照
 

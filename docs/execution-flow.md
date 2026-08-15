@@ -4,9 +4,11 @@ How a signal would become an IG Demo order — and every place that is currently
 blocked. Companion to [architecture.md](architecture.md), which covers the
 research pipeline that produces the signal in the first place.
 
-**Nothing in AlphaFX places an order today.** The execution layer exists, but the
-two gates in front of it (`risk_engine`, and the signal-quality gate) are not
-built and not open. This document marks what is real and what is not.
+**Nothing in AlphaFX places an order today.** `risk_engine` is now built, but it
+refuses everything: `EXECUTION_ENABLED` is False until the signal-quality gate
+opens, and the event-blackout calendar has no data in it yet. `bridge.py` and
+`scripts/execute_demo.py` — the parts that would actually act on a decision —
+are not written. This document marks what is real and what is not.
 
 ## Where execution sits
 
@@ -33,12 +35,12 @@ flowchart LR
 
     classDef built fill:#1f3a5f,stroke:#4da3ff,color:#fff;
     classDef todo fill:#3a3a3a,stroke:#888,color:#ccc,stroke-dasharray:4 3;
-    class DATA,FEAT,QS,RISK,PAPER,JSON,IGC built;
-    class BRIDGE,RE todo;
+    class DATA,FEAT,QS,RISK,PAPER,JSON,IGC,RE built;
+    class BRIDGE todo;
 ```
 
-Solid blue is built and tested. Dashed grey is step A.2/A.3, not yet written —
-so the dotted arrows are the paths that do not exist yet.
+Solid blue is built and tested. Dashed grey is step A.3, not yet written — so the
+dotted arrows are the paths that do not exist yet.
 
 ## The refusal chain
 
@@ -51,10 +53,15 @@ flowchart TD
     G1 -- fallback prior only --> N1[NO TRADE]
     G1 -- extreme volatility --> N2[NO TRADE]
     G1 -- prob below MIN_CONFIDENCE --> N3[NO TRADE]
-    G1 -- pass --> G2{risk_engine<br/>step A.2 · not built}
+    G1 -- pass --> G2{risk_engine}
     G2 -- monthly loss over 5% --> N4[refuse]
     G2 -- drawdown from peak over 15% --> N5[refuse]
     G2 -- major data release within 2h --> N6[refuse]
+    G2 -- signal over 1 business day old --> N4b[refuse]
+    G2 -- position on the same underlying --> N5b[refuse]
+    G2 -- spread over 25% of the stop --> N6b[refuse]
+    G2 -- stop too wide to size at 1% --> N6c[refuse]
+    G2 -- EXECUTION_ENABLED is False --> N6d[refuse]
     G2 -- pass --> G3{ig_client.open_position}
     G3 -- no stop_distance --> N7[IGError]
     G3 -- size over MAX_SIZE --> N8[IGError]
@@ -67,7 +74,7 @@ flowchart TD
     C -- ACCEPTED --> POS[position open]
 
     classDef stop fill:#5f1f1f,stroke:#ff6b6b,color:#fff;
-    class N1,N2,N3,N4,N5,N6,N7,N8,N9,N10 stop;
+    class N1,N2,N3,N4,N4b,N5,N5b,N6,N6b,N6c,N6d,N7,N8,N9,N10 stop;
 ```
 
 The `ig_client` checks duplicate `risk_engine`'s on purpose. `risk_engine` is the
@@ -112,30 +119,34 @@ position rides to day 20 with the model pointing the other way. The `ig-demo-bot
 project recorded the same failure independently — "持多单遇下穿信号时，风控拒绝
 开空单但无人平掉多单，会扛到止损".
 
-The full pre-trade check list for step A.2 — what is already enforced, what the
-engine still has to implement, and what was deliberately left out — is in
+The full pre-trade check list — every rule the engine enforces, what is still
+open, and what was deliberately left out — is in
 [risk-engine-checklist.md](risk-engine-checklist.md).
 
-Three decisions `risk_engine` (step A.2) has to settle:
+Three decisions `risk_engine` had to settle. **All three are now settled** — the
+answers as shipped are in bold:
 
-1. **On a signal flip** — direction chosen: **close, do not reverse.** An open
-   position is itself information, and riding one for 20 days after the model has
-   turned against it is hard to defend; reversing is rejected because it treats a
-   signal validated at a 20-day horizon as an intraday one.
+1. **On a signal flip** — the argued direction was **close, do not reverse**. An
+   open position is itself information, and riding one for 20 days after the
+   model has turned against it is hard to defend; reversing was rejected because
+   it treats a signal validated at a 20-day horizon as an intraday one.
 
-   **This is not yet validated and must not ship before it is.** The backtest
-   exits purely on the fixed holding period —
-   `exit_idx = min(entry_idx + holding_period, ...)` in `backtest.py` — so every
-   number on record (walk-forward, the multi-window runs, the −23% over ten
-   years) describes the *hold-to-barrier* strategy. "Close on flip" is a
-   **different strategy** with no evidence behind it yet. Add an early-exit mode
-   to the backtest, compare the two over the same windows, and only then wire it
-   into `risk_engine`.
-2. **How to match an existing position** — by epic, or by underlying. This is not
-   academic: the account already holds a manual `CS.D.AUDUSD.CFD.IP` long, while
-   the code trades `CS.D.AUDUSD.MINI.IP`. Matching by epic means the system
-   cannot see that long and may open a MINI short against it.
+   **Shipped: neither. The gap above is still open.** The backtest exits purely
+   on the fixed holding period — `exit_idx = min(entry_idx + holding_period, ...)`
+   in `backtest.py` — so every number on record (walk-forward, the multi-window
+   runs, the −23% over ten years) describes the *hold-to-barrier* strategy.
+   "Close on flip" is a **different strategy** with no evidence behind it, and
+   shipping it inside the risk engine would mean running an unvalidated strategy
+   under the banner of risk management. Add an early-exit mode to the backtest,
+   compare over the same windows, and wire it in only if it survives.
+2. **How to match an existing position** — by epic, or by underlying. Not
+   academic: the account holds a manual `CS.D.AUDUSD.CFD.IP` long while the code
+   trades `CS.D.AUDUSD.MINI.IP`, and epic matching cannot see it.
+   **Shipped: by underlying** (`underlying_of()`), the more conservative reading.
 3. **Which notional to size 1% off** — see the Demo-balance note in `CLAUDE.md`.
+   **Shipped: a fixed `NOTIONAL_AUD = 10,000`**, never the IG balance.
+   `MarketContext` has no field that could carry a balance, so the rule is
+   structural rather than a convention someone has to remember.
 
 ## Inside ig_client
 
