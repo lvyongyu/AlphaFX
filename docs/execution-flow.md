@@ -112,6 +112,10 @@ position rides to day 20 with the model pointing the other way. The `ig-demo-bot
 project recorded the same failure independently — "持多单遇下穿信号时，风控拒绝
 开空单但无人平掉多单，会扛到止损".
 
+The full pre-trade check list for step A.2 — what is already enforced, what the
+engine still has to implement, and what was deliberately left out — is in
+[risk-engine-checklist.md](risk-engine-checklist.md).
+
 Three decisions `risk_engine` (step A.2) has to settle:
 
 1. **On a signal flip** — direction chosen: **close, do not reverse.** An open

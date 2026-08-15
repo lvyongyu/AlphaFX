@@ -25,6 +25,8 @@ AlphaFX 已经是一个结构良好的 AUD/USD 宏观因子**研究平台**
 | 风控建议 | `alphafx/risk.py` | `RiskAgent`：波动率分级、极端波动 NO TRADE、杠杆上限 5、`MIN_CONFIDENCE=0.52` |
 | 纸面交易 | `alphafx/trade/` | `PaperBroker`，20 天时间屏障退出；`scripts/paper_trade.py` |
 | 展示 | `alphafx/dashboard/`、`app.py` | Streamlit 仪表盘 + LLM 解释/反方/裁判 agents（**只解释不决策**） |
+| 红队 | `alphafx/llm/debate.py` | 正方/反方多轮辩论 + 综合，`scripts/red_team.py` 按需跑（**只解释不决策**） |
+| 复盘 | `alphafx/review.py` | 决策日志回读 + 结果归因 + 教训存档，`scripts/weekly_review.py`（**只归档不回喂**） |
 | 无头运行 | `scripts/run_signal.py` | 输出结构化 JSON（signal / probability / action / stop_loss / take_profit / factors） |
 | **执行（新）** | `alphafx/execution/` | IG Demo REST 客户端 + 执行侧硬风控 + 信号→执行桥 |
 
@@ -37,6 +39,9 @@ AlphaFX 已经是一个结构良好的 AUD/USD 宏观因子**研究平台**
 ## 核心原则（已在代码中体现，不可退化）
 
 1. **量化层拥有信号**；ML/LLM 层只对比、解释、质疑，永远不能推翻信号
+   —— 这条现在由测试机械保证：`test_decision_path_never_imports_the_llm_or_review_layer`
+   扫 `alphafx/` 下每个模块的 AST，除 `llm/`、`dashboard/`、`review.py` 外
+   一律禁止 import 叙事层或复盘层。**新加的模块默认受管，不用记得去登记**
 2. **无未来数据**：宏观因子按发布时点滞后、扩展窗口校准、ML 只用样本外预测
 3. **没有实现历史校准证据的信号（fallback 先验）不允许开仓**
    （`RiskAgent.EVIDENCE_SOURCES` 机制，这个设计很好）
@@ -75,7 +80,7 @@ AlphaFX 已经是一个结构良好的 AUD/USD 宏观因子**研究平台**
 | 文件 | 职责 | 状态 |
 |---|---|---|
 | `alphafx/execution/ig_client.py` | IG REST 封装（认证 / 行情 / 持仓 / 开仓 / 平仓） | ✅ A.1 完成 |
-| `alphafx/execution/risk_engine.py` | 执行侧硬风控（确定性规则，**永不智能化**） | 🔴 A.2 待做 |
+| `alphafx/execution/risk_engine.py` | 执行侧硬风控（确定性规则，**永不智能化**） | 🔴 A.2 待做，检查清单见 `docs/risk-engine-checklist.md` |
 | `alphafx/execution/bridge.py` | 信号→执行桥：读 `data/latest_signal.json`，经 risk_engine 校验后转 IG 订单 | 🔴 A.3 待做 |
 | `scripts/execute_demo.py` | 入口，**默认 dry-run**，`--live` 才真实提交到 Demo | 🔴 A.3 待做 |
 
@@ -196,6 +201,13 @@ cd ~/Documents/AlphaFX
 .venv/bin/python scripts/run_signal.py --json   # 无头信号，输出 JSON
 .venv/bin/python scripts/paper_trade.py         # 纸面交易
 
+# 复盘物料（不联网、不用凭证）
+.venv/bin/python scripts/weekly_review.py --weeks 4        # 决策日志 + 结果归因，markdown
+.venv/bin/python scripts/weekly_review.py --lesson "..." --lesson-date 2026-08-14
+
+# 红队辩论（要 ANTHROPIC_API_KEY，一次 2*rounds+1 次调用，按需跑）
+.venv/bin/python scripts/red_team.py --rounds 2
+
 # 执行层（Demo）
 .venv/bin/python -m alphafx.execution.ig_client   # 连通性自检：登录 + 行情 + 持仓，不下单
 ```
@@ -235,6 +247,8 @@ uv pip install -r requirements.txt -r requirements-ml.txt
 1. ✅ 迁入 `ig_client.py` 到 `alphafx/execution/`，补单元测试（mock HTTP，24 条）
    —— 2026-08-09 已对真实 Demo 账户跑通登录 / 行情 / 持仓 / 账户余额（未下单）
 2. 🔴 实现 `risk_engine.py`（含熔断状态持久化到 SQLite），补测试
+   —— 检查清单/规格已写好：`docs/risk-engine-checklist.md`，25 条逐条标了
+   built / A.2 / later / n/a，落地时每条 **A.2** 都要对应至少一个测试
 3. 🔴 实现 `bridge.py` + `scripts/execute_demo.py`，dry-run 模式：
    每次运行记录「若执行会下什么单」到日志/数据库，与纸面交易并行对照
 
@@ -250,8 +264,10 @@ uv pip install -r requirements.txt -r requirements-ml.txt
 ### C. 闸门开启后（需我明确确认）
 
 5. 🔴 重新启用 `daily.yml` 的 cron（仍是 Demo），加每日运行摘要日志
-6. 🔴 每周复盘物料自动生成：交易记录、熔断事件、实盘 vs 回测偏差，
+6. 🟡 每周复盘物料自动生成：交易记录、熔断事件、实盘 vs 回测偏差，
    供我拿去做 AI 复盘分析
+   —— 决策记录 + 结果归因 + 教训存档已经能跑（`scripts/weekly_review.py`）；
+   还缺的是熔断事件（等 A.2）和实盘 vs 回测偏差对比
 
 ---
 
