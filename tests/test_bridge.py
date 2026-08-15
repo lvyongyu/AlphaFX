@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+import pandas as pd
 import pytest
 
 from alphafx.database import Database
@@ -19,6 +20,7 @@ from alphafx.execution.bridge import (
     IG_EPICS,
     SignalBridge,
     direction_of,
+    export_execution_log,
     load_signal_file,
 )
 from alphafx.execution.ig_client import DEFAULT_EPIC, IGError
@@ -314,6 +316,53 @@ def test_the_log_is_append_only_across_runs(tmp_path):
     br.run(payload(), now=NOW)
     br.run(payload(), now=NOW)
     assert len(br.db.load_execution_log()) == 2
+
+
+# ---- the committable mirror ----
+
+def test_export_writes_the_log_to_csv(tmp_path):
+    br = bridge(tmp_path)
+    br.run(payload(leg(), leg(instrument="EURUSD")), now=NOW)
+
+    path = export_execution_log(br.db, tmp_path)
+    rows = pd.read_csv(path)
+    assert len(rows) == 2
+    assert set(rows["instrument"]) == {"AUDUSD", "EURUSD"}
+    assert "id" not in rows.columns  # the local row id means nothing across runs
+
+
+def test_export_appends_across_runs_with_a_fresh_database(tmp_path):
+    # This is the CI case: every run starts from an empty SQLite file, so the CSV
+    # is the only thing that accumulates.
+    later = datetime(2026, 8, 14, 3, 0, tzinfo=timezone.utc)
+    for index, when in enumerate((NOW, later)):
+        db = Database(tmp_path / f"run{index}.db")  # a brand-new DB each time
+        engine = RiskEngine(db, calendar=(), calendar_through=CALENDAR_THROUGH)
+        SignalBridge(client=FakeClient(), engine=engine, db=db).run(payload(), now=when)
+        export_execution_log(db, tmp_path)
+
+    rows = pd.read_csv(tmp_path / "execution_log.csv")
+    assert len(rows) == 2  # the first run survived the second run's empty DB
+    assert sorted(rows["run_at"]) == [NOW.isoformat(), later.isoformat()]
+
+
+def test_export_is_idempotent(tmp_path):
+    br = bridge(tmp_path)
+    br.run(payload(), now=NOW)
+
+    export_execution_log(br.db, tmp_path)
+    export_execution_log(br.db, tmp_path)
+    assert len(pd.read_csv(tmp_path / "execution_log.csv")) == 1
+
+
+def test_export_from_an_empty_database_never_truncates(tmp_path):
+    br = bridge(tmp_path)
+    br.run(payload(), now=NOW)
+    export_execution_log(br.db, tmp_path)
+
+    empty = Database(tmp_path / "empty.db")
+    export_execution_log(empty, tmp_path)
+    assert len(pd.read_csv(tmp_path / "execution_log.csv")) == 1
 
 
 def test_bridge_module_declares_no_thresholds():

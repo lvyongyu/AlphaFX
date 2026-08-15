@@ -8,7 +8,7 @@ research pipeline that produces the signal in the first place.
 end — signal file, gate, transport — and it refuses everything:
 `EXECUTION_ENABLED` is False until the signal-quality gate opens, which makes
 `execute_demo.py --live` inert by construction, and the event-blackout calendar
-has no data in it yet. What the dry-run does produce is a log of the order it
+only covers 2026-08-15 to 2026-09-30 (it refuses outside that window). What the dry-run does produce is a log of the order it
 WOULD have sent, run after run, to compare against the paper book.
 
 ## Where execution sits
@@ -216,6 +216,17 @@ The bridge contributes no rules to that line. Every reason in it comes from
 `risk_engine`; a test asserts the bridge module holds no numeric constants at all,
 so a threshold cannot quietly grow there instead of in the engine where it would
 be tested as a rule.
+
+`--export` mirrors the log to `data/execution_log.csv`, which `daily.yml` commits.
+That mirror is not a convenience: a CI run starts from a fresh checkout, so the
+SQLite file is empty every time and the record would never accumulate. Rows are
+keyed by `(run_at, instrument)`, so an export from an empty database appends
+nothing rather than truncating what is already there.
+
+The same ephemerality is a real limitation the CSV does **not** solve: the
+circuit breakers need a balance history, and with a fresh database every run
+`check_breakers()` only ever sees one observation and cannot trip. Breaker state
+is meaningful only where the SQLite file persists — a local machine, for now.
 
 ## Verifying it yourself
 

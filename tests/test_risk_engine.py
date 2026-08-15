@@ -245,9 +245,70 @@ def test_an_unpopulated_calendar_fails_closed(tmp_path):
     assert any("economic calendar is not populated" in reason for reason in decision.reasons)
 
 
-def test_the_shipped_calendar_is_empty_and_therefore_refuses():
-    assert re_mod.ECONOMIC_CALENDAR == ()
-    assert re_mod.CALENDAR_THROUGH is None
+def test_the_shipped_calendar_parses_and_is_ordered():
+    stamps = [re_mod._parse_utc(stamp) for stamp, _ in re_mod.ECONOMIC_CALENDAR]
+    assert all(when is not None for when in stamps)
+    assert stamps == sorted(stamps)
+    assert re_mod._parse_utc(re_mod.CALENDAR_THROUGH) is not None
+
+
+def test_calendar_coverage_is_complete_for_every_covered_month():
+    """The window claims completeness, so every month wholly inside it must carry
+    the monthly releases. This is the guard against someone widening the window
+    without adding the CPI dates — the exact gap the shipped list has."""
+    start = re_mod._parse_utc(re_mod.CALENDAR_FROM)
+    through = re_mod._parse_utc(re_mod.CALENDAR_THROUGH)
+    assert start is not None and start < through
+
+    months, cursor = [], start.replace(day=1)
+    while cursor <= through:
+        month_start = cursor
+        month_end = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1)
+        if month_start >= start and month_end <= through + timedelta(seconds=1):
+            months.append(cursor.strftime("%Y-%m"))
+        cursor = month_end
+    assert months, "the window contains no whole month, so it claims nothing"
+
+    for month in months:
+        labels = {label for stamp, label in re_mod.ECONOMIC_CALENDAR if stamp.startswith(month)}
+        assert any("CPI" in label for label in labels), f"{month} has no CPI blackout"
+        assert any("payrolls" in label for label in labels), f"{month} has no payrolls blackout"
+
+
+def test_dates_before_the_covered_window_also_refuse(tmp_path):
+    # A month with no entries is indistinguishable from a month with no events,
+    # so the window has a floor as well as a ceiling.
+    early = datetime(2026, 7, 20, 3, 0, tzinfo=timezone.utc)
+    decision = RiskEngine(Database(tmp_path / "e.db")).evaluate(
+        request(signal_date="2026-07-20"), market(), now=early
+    )
+    assert decision.risk_checks_passed is False
+    assert any("coverage starts at" in reason for reason in decision.reasons)
+
+
+def test_dates_past_the_covered_window_still_refuse(tmp_path):
+    # October is in the list but outside CALENDAR_THROUGH, so it fails closed
+    # rather than trading against a list that may be missing that month's CPI.
+    october = datetime(2026, 10, 20, 3, 0, tzinfo=timezone.utc)
+    decision = RiskEngine(Database(tmp_path / "e.db")).evaluate(
+        request(signal_date="2026-10-20"), market(), now=october
+    )
+    assert decision.risk_checks_passed is False
+    assert any("only covers through" in reason for reason in decision.reasons)
+
+
+@pytest.mark.parametrize("stamp,label", re_mod.ECONOMIC_CALENDAR)
+def test_every_shipped_event_blacks_out_a_trade(tmp_path, stamp, label):
+    # Each entry is exercised at its own timestamp against a calendar declared
+    # complete through then, so a malformed entry cannot sit unnoticed.
+    when = re_mod._parse_utc(stamp)
+    eng = RiskEngine(
+        Database(tmp_path / "e.db"),
+        calendar=re_mod.ECONOMIC_CALENDAR,
+        calendar_through="2026-12-31T23:59:59Z",
+    )
+    decision = eng.evaluate(request(signal_date=stamp[:10]), market(), now=when)
+    assert any(label in reason for reason in decision.reasons)
 
 
 def test_an_expired_calendar_fails_closed(tmp_path):

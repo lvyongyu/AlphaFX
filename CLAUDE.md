@@ -62,7 +62,11 @@ AlphaFX 已经是一个结构良好的 AUD/USD 宏观因子**研究平台**
 
   由 CI 的 `lint` job 自动拦截，本地自查：
   `grep -rlP '[\x{4e00}-\x{9fff}]' --include="*.py" .` 应该没有输出。
-- `daily.yml` 的自动交易**保持暂停**，直到走完下面路线图的第 4 步
+- `daily.yml` 的自动交易**保持暂停**，直到走完下面路线图的第 4 步。
+  workflow 里现在多了一步 dry-run（`execute_demo.py --export`，不下单，
+  没配 IG secrets 就自己跳过），但 **cron 仍然是注释掉的**——
+  打开 cron 会连带把 `paper_trade.py` 的自动开仓一起恢复，那正是被暂停的东西。
+  两件事要一起决定，见下面「dry-run 记录累积」
 - **执行层永远锁定 Demo 环境**；接真实环境不在本蓝图范围内
 - **`risk_engine.EXECUTION_ENABLED` 保持 `False`**，直到走完路线图第 4 步。
   这是 `daily.yml` 那个闸门在代码里的另一半：光把 cron 打开也开不了单
@@ -213,8 +217,9 @@ cd ~/Documents/AlphaFX
 # 执行层（Demo）
 .venv/bin/python -m alphafx.execution.ig_client   # 连通性自检：登录 + 行情 + 持仓，不下单
 .venv/bin/python -m pytest tests/test_risk_engine.py tests/test_bridge.py -v   # 风控+桥，68 条，离线
-.venv/bin/python scripts/execute_demo.py          # dry-run：只读行情/持仓，不下单
-.venv/bin/python scripts/execute_demo.py --log    # 看历史「若执行会下什么单」
+.venv/bin/python scripts/execute_demo.py           # dry-run：只读行情/持仓，不下单
+.venv/bin/python scripts/execute_demo.py --export  # 顺便写 data/execution_log.csv
+.venv/bin/python scripts/execute_demo.py --log     # 看历史「若执行会下什么单」
 ```
 
 ### Python 环境（2026-08-09 重建）
@@ -253,8 +258,10 @@ uv pip install -r requirements.txt -r requirements-ml.txt
    —— 2026-08-09 已对真实 Demo 账户跑通登录 / 行情 / 持仓 / 账户余额（未下单）
 2. ✅ 实现 `risk_engine.py`（熔断状态持久化到 SQLite），40 条离线测试
    —— 逐条对照见 `docs/risk-engine-checklist.md`。**还剩两件事**：
-   ① 财经日历 `ECONOMIC_CALENDAR` 是空的（**空日历 = 拒绝一切**，故意的），
-   要你从 RBA/美联储官方日程填进去，属于查资料不是写代码；
+   ① 财经日历只覆盖 **2026-08-15 → 2026-09-30**（`CALENDAR_FROM`/`CALENDAR_THROUGH`），
+   **窗口外两头都拒绝**。卡住的是 10–12 月的美国 CPI 发布日期没查到，
+   那三个月的 RBA/FOMC/非农已经在表里但是失效状态。补的时候
+   **CPI 日期和 `CALENDAR_THROUGH` 必须一起改**，只改后者测试会红；
    ② 跨品种相关性上限（第 8 条）推迟，暂时用总手数上限 3.0 手当粗糙代理
 3. ✅ 实现 `bridge.py` + `scripts/execute_demo.py`，28 条离线测试
    —— 每次运行每个品种写一行 `execution_log`（**拒绝的也写**，带方向/手数/止损点数），
@@ -263,6 +270,23 @@ uv pip install -r requirements.txt -r requirements-ml.txt
    脚本会直说而不是假装武装好了。
    注意：`data/latest_signal.json` 里那份是改成组合导出之前的旧格式，
    桥会拒绝并让你重跑 `scripts/paper_trade.py --export`
+
+> **dry-run 记录累积（悬而未决，等你拍板）**
+>
+> `daily.yml` 里 dry-run 那一步已经写好，但 **cron 还是关的**，所以目前只有
+> 手动 `Run workflow` 会跑。要让记录真的累积起来，得同时接受两件事：
+>
+> 1. **打开 cron 会顺带恢复 `paper_trade.py` 的自动开仓**——这是 CLAUDE.md
+>    明文暂停的东西。而且「dry-run 与纸面交易并行对照」本来就需要纸面账本
+>    也在跑，两者是绑在一起的
+> 2. **本仓库是 public**，要把 IG demo 凭证放进 Actions secrets
+>
+> 不想动这两条的话，替代方案是**本机定时跑**
+> （`paper_trade.py --export && execute_demo.py --export`），
+> 凭证留在本地 `.env`，顺带熔断状态也能真正累积（见下）。
+>
+> **CI 里熔断是失效的**：熔断要余额历史，而 CI 每次都是空库，
+> `check_breakers()` 只看得到一条观测，永远不触发。CSV 镜像解决不了这个。
 
 ### B. 信号质量攻坚（决定闸门何时开，继续 ROADMAP V2 方向）
 

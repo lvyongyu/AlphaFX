@@ -4,11 +4,11 @@ The pre-trade checks `alphafx/execution/risk_engine.py` enforces, and the ones
 still outstanding. Companion to [execution-flow.md](execution-flow.md), which
 shows where the engine sits in the refusal chain.
 
-**Step A.2 has landed.** The engine is implemented and covered by
-`tests/test_risk_engine.py` (40 tests, offline). Two rows remain open and are
-marked as such: the economic calendar has no data in it yet (row 18, which
-therefore refuses every trade), and the cross-pair correlation cap (row 8) is
-deferred.
+**The engine is implemented** and covered by `tests/test_risk_engine.py` (54
+tests, offline). Two rows remain open and are marked as such: the economic
+calendar is populated only from 2026-08-15 through 2026-09-30 (row 18 — outside
+that window every trade is refused), and the cross-pair correlation cap (row 8)
+is deferred.
 
 The check list was cross-referenced against the risk-analyst dimensions used by
 [TradingAgents](https://github.com/TauricResearch/TradingAgents) — a multi-agent
@@ -75,7 +75,7 @@ data, which is what keeps the whole check surface unit-testable.
 | # | Check | Status | Where |
 | --- | --- | --- | --- |
 | 17 | `marketStatus == TRADEABLE` | built ×2 | Checked before sending, so a weekend fails on our side with a clear reason instead of as an IG rejection. |
-| 18 | Event blackout ±2h around RBA / FOMC / CPI / NFP | built, **calendar empty** | The check works and **fails closed**: `ECONOMIC_CALENDAR` ships empty with `CALENDAR_THROUGH = None`, so every trade is refused until it is filled from the official schedules. A schedule written from memory would look authoritative and be wrong, and a blackout that silently lapses when a feed goes stale is worse than one that refuses. Filling it is a data task, not a code task. |
+| 18 | Event blackout ±2h around RBA / FOMC / CPI / NFP | built, **covered 2026-08-15 → 2026-09-30** | `[CALENDAR_FROM, CALENDAR_THROUGH]` is the window the list is *complete* over, not the span of its entries, and the check **fails closed on both sides** — a month with no entries is indistinguishable from a month with no events. Later RBA / FOMC / payrolls dates are already in the list but inert, because the Oct–Dec CPI dates could not be confirmed and a month missing its CPI blackout is worse than a month that refuses. Extending coverage means adding those dates and moving `CALENDAR_THROUGH` **together**: `test_calendar_coverage_is_complete_for_every_covered_month` fails if only the second half is done. |
 | 19 | Spread sanity check before sending | built | Refuses when the spread exceeds 25% of the stop distance. Catches thin liquidity and stale quotes — the case a backtest never shows. |
 | 20 | Liquidity / market-impact assessment | **n/a** | A TradingAgents dimension that does not transfer. At ≤1.0 lot on a major pair, impact is not measurable; #19 is the useful residue. |
 | 21 | Demo host is pinned | built | `BASE_URL` is a module constant, not config, with a test. |
@@ -125,11 +125,13 @@ data, which is what keeps the whole check surface unit-testable.
   refusal in their output comes from here.
 - **Closing or managing an open position.** Every check here is pre-trade. Exit
   logic still lives in `PaperBroker`'s time barrier.
-- **The calendar data** for row 18.
+- **Calendar coverage past 2026-09-30** (row 18). The blocker is the Oct–Dec 2026
+  CPI release dates; the RBA, FOMC and payrolls dates for those months are
+  already in the list.
 
 ## Verifying
 
 ```bash
-.venv/bin/python -m pytest tests/test_risk_engine.py -v   # 40 tests, offline, no credentials, no quota
+.venv/bin/python -m pytest tests/test_risk_engine.py -v   # 54 tests, offline, no credentials, no quota
 .venv/bin/python -m pytest tests/test_execution.py -v     # 24 tests, the ig_client floor beneath it
 ```

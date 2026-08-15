@@ -76,14 +76,45 @@ MAX_SIGNAL_AGE_BDAYS = 1
 
 # --- event blackout ----------------------------------------------------------
 BLACKOUT_HOURS = 2
-# (UTC ISO timestamp, label) for RBA / FOMC / CPI / NFP releases. Deliberately
-# EMPTY: a schedule invented from memory would look authoritative and be wrong.
-# Fill it from the official calendars and set CALENDAR_THROUGH to the date it is
-# populated to. Until then the blackout check fails CLOSED — an unpopulated or
-# expired calendar refuses every trade, which is the safe direction for a guard
-# whose failure mode would otherwise be silent lapse.
-ECONOMIC_CALENDAR: tuple[tuple[str, str], ...] = ()
-CALENDAR_THROUGH: str | None = None
+# (UTC ISO timestamp, label) for RBA / FOMC / CPI / NFP releases.
+#
+# [CALENDAR_FROM, CALENDAR_THROUGH] is the window this list is COMPLETE over —
+# not the span of its entries. The blackout check fails CLOSED outside it,
+# because a calendar that quietly runs out is a guard that lapses without anyone
+# noticing, and a month with no entries is indistinguishable from a month with
+# no events. Entries beyond CALENDAR_THROUGH are inert until it is moved
+# forward; they sit here so extending coverage is a one-line change once the
+# missing series is confirmed.
+#
+# Local times converted to UTC at the offset in force on each date (US DST ends
+# 2026-11-01, AU DST starts 2026-10-04):
+#   RBA decision    14:30 Sydney on the second day of the two-day meeting
+#   FOMC statement  14:00 US Eastern on the second day
+#   CPI / payrolls  08:30 US Eastern
+#
+# Sources: RBA 2026 Monetary Policy Board dates (media release mr-25-02); the
+# Fed's published 2026 FOMC calendar; the BLS Employment Situation schedule.
+# `test_calendar_coverage_is_complete_for_every_covered_month` fails if
+# CALENDAR_THROUGH is moved past a month with no CPI or payrolls entry.
+ECONOMIC_CALENDAR: tuple[tuple[str, str], ...] = (
+    ("2026-09-04T12:30:00Z", "US non-farm payrolls"),
+    ("2026-09-11T12:30:00Z", "US CPI"),
+    ("2026-09-16T18:00:00Z", "FOMC decision"),
+    ("2026-09-29T04:30:00Z", "RBA decision"),
+    # --- beyond the covered window ---------------------------------------
+    # Verified, but the CPI release dates for Oct/Nov/Dec 2026 are not, and a
+    # month missing its CPI blackout is worse than a month that refuses
+    # outright. Add them and move CALENDAR_THROUGH together.
+    ("2026-10-02T12:30:00Z", "US non-farm payrolls"),
+    ("2026-10-28T18:00:00Z", "FOMC decision"),
+    ("2026-11-03T03:30:00Z", "RBA decision"),
+    ("2026-11-06T13:30:00Z", "US non-farm payrolls"),
+    ("2026-12-04T13:30:00Z", "US non-farm payrolls"),
+    ("2026-12-08T03:30:00Z", "RBA decision"),
+    ("2026-12-09T19:00:00Z", "FOMC decision"),
+)
+CALENDAR_FROM: str | None = "2026-08-15T00:00:00Z"
+CALENDAR_THROUGH: str | None = "2026-09-30T23:59:59Z"
 
 NO_TRADE = "NO TRADE"
 
@@ -160,10 +191,18 @@ class RiskEngine:
         db: Database | None = None,
         calendar: tuple[tuple[str, str], ...] | None = None,
         calendar_through: str | None = None,
+        calendar_from: str | None = None,
     ) -> None:
         self.db = db or Database()
+        # Passing `calendar` replaces the whole window, so a caller can never end
+        # up with an injected list judged against the shipped coverage claim.
         self.calendar = ECONOMIC_CALENDAR if calendar is None else calendar
-        self.calendar_through = CALENDAR_THROUGH if calendar is None else calendar_through
+        if calendar is None:
+            self.calendar_from = CALENDAR_FROM
+            self.calendar_through = CALENDAR_THROUGH
+        else:
+            self.calendar_from = calendar_from
+            self.calendar_through = calendar_through
 
     # ---- the gate ----
 
@@ -324,6 +363,13 @@ class RiskEngine:
             return (
                 f"economic calendar only covers through {self.calendar_through}; "
                 "refusing rather than trading past an expired blackout list"
+            )
+        start = _parse_utc(self.calendar_from) if self.calendar_from else None
+        if start is not None and now < start:
+            return (
+                f"economic calendar coverage starts at {self.calendar_from}; "
+                "a month with no entries is indistinguishable from a month with "
+                "no events, so this is refused rather than assumed clear"
             )
         window = timedelta(hours=BLACKOUT_HOURS)
         for stamp, label in self.calendar:

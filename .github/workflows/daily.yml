@@ -30,11 +30,35 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run paper trading and export snapshots
         run: python scripts/paper_trade.py --export
+      # Dry-run the execution gate against IG Demo and append what it WOULD have
+      # sent to data/execution_log.csv. It places nothing: EXECUTION_ENABLED is
+      # False, and --live is not passed. The record only becomes worth anything
+      # once it has run alongside the paper book for a few months, which is why
+      # it is appended to a committed CSV — the SQLite file is empty on every
+      # fresh checkout.
+      #
+      # No-ops unless the IG secrets are configured: with them unset the env vars
+      # arrive empty, IGClient refuses to build, and the script prints why and
+      # exits 0. (A `secrets`-context `if:` would not work here — that context is
+      # not available in step conditions.) This repository is PUBLIC, so putting
+      # demo credentials in Actions secrets is a deliberate choice, not a default.
+      #
+      # Known limitation: the circuit breakers cannot accumulate here. They need
+      # a balance history, and the DB is fresh each run, so check_breakers() sees
+      # a single observation and never trips. Breaker state is only meaningful
+      # where the SQLite file persists — a local machine, for now.
+      - name: Dry-run the execution gate (places nothing)
+        env:
+          IG_API_KEY: ${{ secrets.IG_API_KEY }}
+          IG_USERNAME: ${{ secrets.IG_USERNAME }}
+          IG_PASSWORD: ${{ secrets.IG_PASSWORD }}
+        run: python scripts/execute_demo.py --export
       - name: Commit updated snapshots
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/latest_signal.json data/paper_positions.csv data/signal_history.csv
+          git add data/execution_log.csv 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No snapshot changes to commit."
           else

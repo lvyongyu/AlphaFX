@@ -11,6 +11,7 @@ Nothing is submitted unless BOTH `--live` is passed AND
 by construction — the script says so rather than pretending it armed something.
 
     python scripts/execute_demo.py                  # dry-run against IG Demo
+    python scripts/execute_demo.py --export         # also mirror the log to data/
     python scripts/execute_demo.py --json
     python scripts/execute_demo.py --log            # show recent attempts and exit
     python scripts/execute_demo.py --live           # refused while the gate is shut
@@ -29,7 +30,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # make `alphafx` i
 
 from alphafx.config import load_local_env  # noqa: E402
 from alphafx.database import Database  # noqa: E402
-from alphafx.execution.bridge import SignalBridge, load_signal_file  # noqa: E402
+from alphafx.execution.bridge import (  # noqa: E402
+    SignalBridge,
+    export_execution_log,
+    load_signal_file,
+)
 from alphafx.execution.ig_client import IGClient, IGError  # noqa: E402
 from alphafx.execution.risk_engine import EXECUTION_ENABLED  # noqa: E402
 
@@ -108,6 +113,9 @@ def main() -> None:
                         help="submit allowed orders (inert while EXECUTION_ENABLED is False)")
     parser.add_argument("--log", action="store_true", help="print recent attempts and exit")
     parser.add_argument("--limit", type=int, default=20, help="rows for --log (default 20)")
+    parser.add_argument("--export", action="store_true",
+                        help="mirror the log to data/execution_log.csv (needed in CI, where "
+                             "the SQLite file starts empty every run)")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -134,6 +142,12 @@ def main() -> None:
 
     report = SignalBridge(client=client, db=db).run(load_signal_file(path), live=args.live)
     payload = report_to_dict(report)
+
+    if args.export:
+        written = export_execution_log(db)
+        payload["exported"] = written
+        if not args.json:
+            print(f"exported: {written}\n")
 
     if args.json:
         print(json.dumps(payload, indent=2, default=str))

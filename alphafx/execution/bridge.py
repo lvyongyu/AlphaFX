@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from ..database import Database
 from .ig_client import DEFAULT_EPIC, IGError
 from .risk_engine import Decision, MarketContext, RiskEngine, TradeRequest
@@ -103,6 +105,35 @@ class BridgeReport:
 
 def load_signal_file(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def export_execution_log(db: Database, out_dir: str | Path = "data") -> str:
+    """Mirror the log to a committable CSV, and return the path written.
+
+    A CI run starts from a fresh checkout, so the SQLite file is empty every time
+    and the dry-run record would never accumulate — which would defeat the whole
+    point of running it daily. The CSV is the durable copy.
+
+    Rows are keyed by (run_at, instrument): re-exporting is idempotent, and an
+    export from an empty DB adds nothing rather than truncating what is already
+    there. History is only ever appended to.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "execution_log.csv"
+
+    fresh = db.load_execution_log(limit=10_000)
+    existing = pd.read_csv(path) if path.exists() else pd.DataFrame()
+    combined = pd.concat([existing, fresh], ignore_index=True) if not existing.empty else fresh
+    if combined.empty:
+        return str(path)
+    combined = (
+        combined.drop(columns=["id"], errors="ignore")
+        .drop_duplicates(subset=["run_at", "instrument"], keep="last")
+        .sort_values(["run_at", "instrument"])
+    )
+    combined.to_csv(path, index=False)
+    return str(path)
 
 
 def direction_of(action: str | None) -> str | None:
